@@ -3372,6 +3372,53 @@ testSuite = do
 
       Ae.encode result `shouldBe` rmSpaces expected
 
+    it "doesn't allow writeonly tokens to return data" $ do
+      let dbName = "no-writeonly-return.db"
+      withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        execute_
+          conn
+          [sql|
+            CREATE TABLE items (
+              id INTEGER PRIMARY KEY
+            )
+          |]
+
+      let
+        query :: Text
+        query =
+          [gql|
+              mutation items {
+                update_items(filter: { id: { eq: 0 }}, set: { id: 0 }) {
+                  returning { id }
+                }
+              }
+            |]
+
+        expected =
+          rmSpaces
+            [raw|
+              {
+                "data": null,
+                "errors": [{
+                  "locations": [{ "column":3, "line":2 }],
+                  "message": "Cannot query field \"update_items\" on type \"Mutation\"."
+                }]
+              }
+            |]
+
+      schema <- withRetryConn (unpack dbPath) $ \conn -> do
+        tables <- getTables conn
+        getDerivedSchema
+          defaultSchemaConf{accessMode = WriteOnly}
+          conn
+          dbPath
+          tables
+
+      Right response <-
+        graphql schema Nothing mempty query
+
+      Ae.encode response `shouldBe` expected
+
 
 deleteDbEntries :: Text -> IO ()
 deleteDbEntries databasePath = do
