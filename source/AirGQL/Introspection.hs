@@ -1326,6 +1326,10 @@ getSchemaFieldOutput dbId conn accessMode tables = do
         ReadOnly -> Null
         WriteOnly -> obj
         ReadAndWrite -> obj
+      requiresRead obj = case accessMode of
+        ReadOnly -> Null
+        WriteOnly -> obj
+        ReadAndWrite -> obj
 
     pure $
       customRowTypes
@@ -1379,42 +1383,43 @@ getSchemaFieldOutput dbId conn accessMode tables = do
                                       ]
                                 )
                               ]
-                        , Object $
-                            HashMap.fromList
-                              [ ("name", "returning")
-                              ,
-                                ( "type"
-                                , Object $
-                                    HashMap.fromList
-                                      [ ("kind", "NON_NULL")
-                                      ,
-                                        ( "ofType"
-                                        , Object $
-                                            HashMap.fromList
-                                              [ ("kind", "LIST")
-                                              ,
-                                                ( "ofType"
-                                                , Object $
-                                                    HashMap.fromList
-                                                      [ ("kind", "NON_NULL")
-                                                      ,
-                                                        ( "ofType"
-                                                        , Object $
-                                                            HashMap.fromList
-                                                              [ ("kind", "OBJECT")
-                                                              ,
-                                                                ( "name"
-                                                                , String $ doubleXEncodeGql table.name <> "_row"
-                                                                )
-                                                              ]
-                                                        )
-                                                      ]
-                                                )
-                                              ]
-                                        )
-                                      ]
-                                )
-                              ]
+                        , requiresRead $
+                            Object $
+                              HashMap.fromList
+                                [ ("name", "returning")
+                                ,
+                                  ( "type"
+                                  , Object $
+                                      HashMap.fromList
+                                        [ ("kind", "NON_NULL")
+                                        ,
+                                          ( "ofType"
+                                          , Object $
+                                              HashMap.fromList
+                                                [ ("kind", "LIST")
+                                                ,
+                                                  ( "ofType"
+                                                  , Object $
+                                                      HashMap.fromList
+                                                        [ ("kind", "NON_NULL")
+                                                        ,
+                                                          ( "ofType"
+                                                          , Object $
+                                                              HashMap.fromList
+                                                                [ ("kind", "OBJECT")
+                                                                ,
+                                                                  ( "name"
+                                                                  , String $ doubleXEncodeGql table.name <> "_row"
+                                                                  )
+                                                                ]
+                                                          )
+                                                        ]
+                                                  )
+                                                ]
+                                          )
+                                        ]
+                                  )
+                                ]
                         ]
                     )
                   ]
