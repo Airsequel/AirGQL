@@ -1,0 +1,5 @@
+.stack-work
+*.hie
+/bruno_collection
+/data
+/tests/*.db

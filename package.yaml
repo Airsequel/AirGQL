@@ -1,0 +1,143 @@
+name: airgql
+version: 0.7.1.2
+synopsis: Automatically generate a GraphQL API for an SQLite database
+description: |
+  AirGQL automatically generates a GraphQL API for SQLite databases.
+  It analyses the database schema
+  and builds the corresponding GraphQL introspection and data resolvers.
+
+  The generated API supports all basic CRUD operations and
+  even complex queries and mutations including filters and pagination.
+  It's the perferct solution for easily integrating GraphQL support
+  into existing Haskell servers.
+
+  AirGQL is part of the Airsequel project, which provides a complete solution
+  for building web applications on top of SQLite databases.
+homepage: https://github.com/Airsequel/AirGQL
+license: AGPL-3.0-or-later
+author: Feram GmbH
+maintainer: adrian@feram.io
+copyright: 2024 Feram GmbH
+category: Web, Database, SQL, SQLite, GraphQL, Servant, CLI Tool
+
+extra-source-files:
+  - readme.md
+
+flags:
+  lib-only:
+    description: Only build/install the library and not the CLI tool.
+    manual: true
+    default: false
+
+dependencies:
+  - base >= 4.18.2 && < 4.19
+  - protolude >= 0.3.4 && < 0.4
+  - text >= 2.0.2 && < 2.1
+  - sqlite-simple >= 0.4.19 && < 0.5
+
+default-extensions:
+  - DataKinds
+  - DeriveGeneric
+  - DerivingStrategies
+  - DuplicateRecordFields
+  - FlexibleContexts
+  - FlexibleInstances
+  - GADTs
+  - GeneralizedNewtypeDeriving
+  - ImportQualifiedPost
+  - LambdaCase
+  - MultiParamTypeClasses
+  - MultiWayIf
+  - NamedFieldPuns
+  - NoImplicitPrelude
+  - NumericUnderscores
+  - OverloadedRecordDot
+  - OverloadedStrings
+  - RankNTypes
+  - RecordWildCards
+  - ScopedTypeVariables
+  - StandaloneDeriving
+  - TupleSections
+  - TypeApplications
+  - TypeFamilies
+  - TypeOperators
+  - TypeSynonymInstances
+  - UndecidableInstances
+
+ghc-options:
+  - -fno-warn-orphans
+  - -fwrite-ide-info
+  - -Weverything
+  - -Wno-all-missed-specialisations
+  - -Wno-missing-deriving-strategies
+  - -Wno-missing-kind-signatures
+  - -Wno-missing-safe-haskell-mode
+  - -Wno-unsafe
+
+library:
+  source-dirs: source
+  dependencies:
+    - aeson >= 2.1.2.1 && < 2.3
+    - blaze-markup >= 0.8.3 && < 0.9
+    - bytestring >= 0.11.5 && < 0.12
+    - conduit >= 1.3.5 && < 1.4
+    - directory >= 1.3.8 && < 1.4
+    - double-x-encoding >= 1.2.1 && < 1.3
+    - exceptions >= 0.10.7 && < 0.11
+    - extra >= 1.7.14 && < 1.8
+    - filepath >= 1.4.200 && < 1.5
+    - graphql >= 1.2.0.1 && < 1.4
+    - graphql-spice >= 1.0.2 && < 1.1
+    - http-types >= 0.12.4 && < 0.13
+    - process >= 1.6.17 && < 1.7
+    - scientific >= 0.3.7 && < 0.4
+    - servant >= 0.20.1 && < 0.21
+    - servant-blaze >= 0.9.1 && < 0.10
+    - servant-docs >= 0.13 && < 0.14
+    - servant-multipart >= 0.12.1 && < 0.13
+    - servant-server >= 0.20 && < 0.21
+    - simple-sql-parser >= 0.6.1 && < 0.8
+    - template-haskell >= 2.20.0 && < 2.21
+    - time >= 1.12.2 && < 1.13
+    - typed-process >= 0.2.11 && < 0.3
+    - unix >= 2.8.4 && < 2.9
+    - unordered-containers >= 0.2.20 && < 0.3
+    - wai >= 3.2.4 && < 3.3
+    - wai-extra >= 3.1.14 && < 3.2
+
+executables:
+  airgql:
+    when:
+      - condition: flag(lib-only)
+        then: { buildable: false }
+        else: { buildable: true }
+    source-dirs: app
+    main: Main.hs
+    ghc-options:
+      - -threaded
+    dependencies:
+      - airgql
+      - cmdargs >= 0.10.22 && < 0.11
+      - githash >= 0.1.7 && < 0.2
+      - http-client >= 0.7.17 && < 0.8
+      - wai >= 3.2.4 && < 3.3
+      - wai-cors >= 0.2.7 && < 0.3
+      - warp >= 3.3.31 && < 3.4
+
+tests:
+  airgql-test:
+    main: Spec.hs
+    source-dirs: tests
+    dependencies:
+      - aeson >= 2.1.2.1 && < 2.3
+      - airgql
+      - bytestring >= 0.11.5 && < 0.12
+      - directory >= 1.3.8 && < 1.4
+      - exceptions >= 0.10.7 && < 0.11
+      - filepath >= 1.4.200 && < 1.5
+      - graphql >= 1.2.0.1 && < 1.4
+      - graphql-spice >= 1.0.2 && < 1.1
+      - hspec >= 2.11.8 && < 2.12
+      - servant-server >= 0.20 && < 0.21
+      - unix >= 2.8.4 && < 2.9
+      - unordered-containers >= 0.2.20 && < 0.3
