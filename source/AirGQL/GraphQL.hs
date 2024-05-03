@@ -840,10 +840,11 @@ mutationTypeNameField nameOfTable =
 
 
 getMutationResponse
-  :: Text
+  :: AccessMode
+  -> Text
   -> [ColumnEntry]
   -> Out.Type IO
-getMutationResponse tableName columnEntries =
+getMutationResponse accessMode tableName columnEntries =
   Out.NamedObjectType $
     outObjectTypeToObjectType $
       OutObjectType
@@ -853,7 +854,7 @@ getMutationResponse tableName columnEntries =
               tableName <> " mutation response description"
         , interfaceTypes = []
         , fields =
-            HashMap.fromList
+            HashMap.fromList $
               [
                 ( "affected_rows"
                 , let
@@ -878,43 +879,47 @@ getMutationResponse tableName columnEntries =
                   in
                     ValueResolver field value
                 )
-              ,
-                ( "returning"
-                , let
-                    field :: Out.Field IO
-                    field =
-                      outFieldToField $
-                        OutField
-                          { descriptionMb =
-                              Just
-                                "Non null returning description"
-                          , fieldType =
-                              Out.NonNullListType $
-                                Out.NamedObjectType $
-                                  Out.ObjectType
-                                    "returning"
-                                    (Just "short desc")
-                                    []
-                                    ( HashMap.fromList $
-                                        colNamesWithValResolver columnEntries
-                                    )
-                          , arguments = HashMap.empty
-                          }
-
-                    value :: ReaderT Out.Context IO Value
-                    value = do
-                      context <- ask
-                      case context & Out.values of
-                        Object obj ->
-                          pure $
-                            fromMaybe (Object P.mempty) $
-                              HashMap.lookup "returning" obj
-                        _ -> pure $ Object P.mempty
-                  in
-                    ValueResolver field value
-                )
               , mutationTypeNameField tableName
               ]
+                <> case accessMode of
+                  WriteOnly -> []
+                  _ ->
+                    [
+                      ( "returning"
+                      , let
+                          field :: Out.Field IO
+                          field =
+                            outFieldToField $
+                              OutField
+                                { descriptionMb =
+                                    Just
+                                      "Non null seturning description"
+                                , fieldType =
+                                    Out.NonNullListType $
+                                      Out.NamedObjectType $
+                                        Out.ObjectType
+                                          "returning"
+                                          (Just "short desc")
+                                          []
+                                          ( HashMap.fromList $
+                                              colNamesWithValResolver columnEntries
+                                          )
+                                , arguments = HashMap.empty
+                                }
+
+                          value :: ReaderT Out.Context IO Value
+                          value = do
+                            context <- ask
+                            case context & Out.values of
+                              Object obj ->
+                                pure $
+                                  fromMaybe (Object P.mempty) $
+                                    HashMap.lookup "returning" obj
+                              _ -> pure $ Object P.mempty
+                        in
+                          ValueResolver field value
+                      )
+                    ]
         }
 
 
@@ -1085,10 +1090,11 @@ executeSqlMutation connection tableName args columnEntries filterElements = do
 mutationType
   :: Connection
   -> Integer
+  -> AccessMode
   -> Text
   -> [TableEntryRaw]
   -> IO (Maybe (Out.ObjectType IO))
-mutationType connection maxRowsPerTable dbId tables = do
+mutationType connection maxRowsPerTable accessMode dbId tables = do
   let
     documentation =
       "Available queries for database \"" <> dbId <> "\""
@@ -1206,7 +1212,7 @@ mutationType connection maxRowsPerTable dbId tables = do
         outFieldToField $
           OutField
             { descriptionMb = Just "description"
-            , fieldType = getMutationResponse tableName columnEntries
+            , fieldType = getMutationResponse accessMode tableName columnEntries
             , arguments =
                 HashMap.fromList
                   [ ("objects", objectsType)
@@ -1520,7 +1526,7 @@ mutationType connection maxRowsPerTable dbId tables = do
         outFieldToField $
           OutField
             { descriptionMb = Just $ "Provides entries from " <> tableName
-            , fieldType = getMutationResponse tableName columnEntries
+            , fieldType = getMutationResponse accessMode tableName columnEntries
             , arguments =
                 HashMap.fromList
                   [
@@ -1559,7 +1565,7 @@ mutationType connection maxRowsPerTable dbId tables = do
         outFieldToField $
           OutField
             { descriptionMb = Just $ "Provides entries from " <> tableName
-            , fieldType = getMutationResponse tableName columnEntries
+            , fieldType = getMutationResponse accessMode tableName columnEntries
             , arguments =
                 HashMap.fromList
                   [
@@ -1659,6 +1665,7 @@ getDerivedSchema schemaConf connection dbId tables = do
     mutationType
       connection
       schemaConf.maxRowsPerTable
+      schemaConf.accessMode
       dbId
       tables
 
