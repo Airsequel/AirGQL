@@ -51,6 +51,15 @@ dependencies:
   - …
 ```
 
+Also set the `lib-only` flag in your `stck.yaml` file
+to avoid irrelevant errors:
+
+```yaml
+flags:
+  airgql:
+    lib-only: true
+```
+
 
 ## Usage
 
