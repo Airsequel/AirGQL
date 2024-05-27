@@ -27,6 +27,7 @@ import Protolude (
   not,
   ($),
   (&),
+  (&&),
   (<&>),
   (>>=),
  )
@@ -73,6 +74,7 @@ import AirGQL.Lib (
   column_name_gql,
   datatype_gql,
   getColumns,
+  isOmittable,
   notnull,
   select_options,
  )
@@ -1217,7 +1219,7 @@ getSchemaFieldOutput dbId conn accessMode tables = do
           colName
           "" -- TODO: Reactivate description when user can specify it
           [] -- No arguments
-          ( if columnEntry.notnull
+          ( if columnEntry.notnull && not columnEntry.isOmittable
               then ["NON_NULL", "SCALAR"]
               else ["SCALAR"]
           )
