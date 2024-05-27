@@ -135,7 +135,7 @@ instance FromField ObjectType where
               { errSQLType = "Object Type"
               , errHaskellType = "String"
               , errMessage =
-                  "\"" <> show sqlData <> "\" is not a vaild object type"
+                  "\"" <> show sqlData <> "\" is not a valid object type"
               }
         ]
 
@@ -999,7 +999,7 @@ sanitizeSql sql =
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/27
     & replaceWithSpace "if not exists" ""
-    -- TOOD: Remove after
+    -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/37
     & replaceCaseInsensitive "insert or abort " "insert "
     & replaceCaseInsensitive "insert or fail " "insert "
@@ -1198,7 +1198,7 @@ sqlite =
         , "nothing"
         , "notnull"
         , -- although "null" is on the official list of keywords, adding it here
-          --  seems to break "select NULL as ..." statemenets
+          --  seems to break "select NULL as ..." statements
           -- , "null"
           "nulls"
         , "of"
