@@ -337,12 +337,26 @@ getColumnUniqueConstraint col_name = \case
         { name = getFirstName names
         , columns = [col_name]
         }
+  -- Primary keys are unique by default, even though they do not have an unique index
+  SQL.ColConstraintDef names (SQL.ColPrimaryKeyConstraint _) ->
+    Just $
+      UniqueConstraint
+        { name = getFirstName names
+        , columns = [col_name]
+        }
   _ -> Nothing
 
 
 tableUniqueConstraints :: SQL.TableElement -> [UniqueConstraint]
 tableUniqueConstraints = \case
   SQL.TableConstraintDef names (SQL.TableUniqueConstraint columns) ->
+    [ UniqueConstraint
+        { name = getFirstName names
+        , columns = P.fmap nameAsText columns
+        }
+    ]
+  -- Primary keys are unique by default, even though they do not have an unique index
+  SQL.TableConstraintDef names (SQL.TablePrimaryKeyConstraint columns) ->
     [ UniqueConstraint
         { name = getFirstName names
         , columns = P.fmap nameAsText columns
@@ -779,12 +793,8 @@ getColumnsFromParsedTableEntry connection tableEntry = do
         , datatype = "INTEGER"
         , datatype_gql = Just $ stringToGqlTypeName "Int"
         , select_options = P.Nothing
-        , -- While the rowid is actually NOT NULL,
-          -- it must be set to false here
-          -- to show in the GraphQL docs that it can be omitted
-          -- since it will be set automatically.
-          notnull = False
-        , isUnique = False
+        , notnull = True
+        , isUnique = True
         , isOmittable = True
         , isGenerated = False
         , dflt_value = P.Nothing
