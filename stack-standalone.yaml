@@ -1,7 +1,7 @@
 resolver: lts-22.22
 
 extra-deps:
-  - double-x-encoding-1.1.1
+  - double-x-encoding-1.2.1
 
   - graphql-spice-1.0.2.0
 

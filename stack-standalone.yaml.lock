@@ -5,12 +5,12 @@
 
 packages:
 - completed:
-    hackage: double-x-encoding-1.1.1@sha256:f3b99d41172e51451532391ceefcd3cddcd6c4e494c6f744c3e91b2a31cc452d,1781
+    hackage: double-x-encoding-1.2.1@sha256:9dfc5a74ad82f507a5adeeddc7e32545cde04d11716fc44cd9bd2160bb38fb4c,1813
     pantry-tree:
-      sha256: 383992adc327adfc2b5ecfc7e026105f8f162dccf76bb2b157c642e41ca8e28d
-      size: 188
+      sha256: 9d0d9316d3da245a690dabecee9fb1797a10e09344758e9b8e7f7cb2728b5c04
+      size: 237
   original:
-    hackage: double-x-encoding-1.1.1
+    hackage: double-x-encoding-1.2.1
 - completed:
     hackage: graphql-spice-1.0.2.0@sha256:97d22da8ec38342408bcd237e91e76ffcdad4f14df666f62b0b1ccba6bf39b87,2000
     pantry-tree:
