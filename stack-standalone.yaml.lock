@@ -31,7 +31,7 @@ packages:
     url: https://github.com/Airsequel/simple-sql-parser/archive/680f2b77c53fcc086dc7d5f498f764ad2235b828.tar.gz
 snapshots:
 - completed:
-    sha256: e5cac927cf7ccbd52aa41476baa68b88c564ee6ddc3bc573dbf4210069287fe7
-    size: 713340
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/19.yaml
-  original: lts-22.19
+    sha256: 4be1ca5d31689b524a7f0f17a439bbe9136465213edc498e9a395899a670f2aa
+    size: 718486
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/22.yaml
+  original: lts-22.22

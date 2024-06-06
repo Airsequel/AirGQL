@@ -51,7 +51,7 @@ dependencies:
   - …
 ```
 
-Also set the `lib-only` flag in your `stck.yaml` file
+Also set the `lib-only` flag in your `stack.yaml` file
 to avoid irrelevant errors:
 
 ```yaml
