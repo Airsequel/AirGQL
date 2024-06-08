@@ -1,5 +1,5 @@
 name: airgql
-version: 0.7.1.2
+version: 0.7.1.3
 synopsis: Automatically generate a GraphQL API for an SQLite database
 description: |
   AirGQL automatically generates a GraphQL API for SQLite databases.
