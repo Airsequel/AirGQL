@@ -66,7 +66,8 @@ import Protolude qualified as P
 import AirGQL.Utils (collectAllErrorsAsText, quoteText)
 import Control.Monad (MonadFail (fail))
 import Control.Monad.Catch (catchAll)
-import Data.Aeson (FromJSON, ToJSON, Value (Bool, Null, Number, String))
+import Data.Aeson (FromJSON, ToJSON, Value (Bool, Null, Number, Object, String))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Scientific qualified as Scientific
 import Data.Text (isInfixOf, toUpper)
 import Data.Text qualified as T
@@ -807,6 +808,10 @@ getColumnsFromParsedTableEntry connection tableEntry = do
         let
           columnDefMb = P.find (\d -> columnDefName d == column_name) columnDefs
           selectOpts = columnDefMb >>= columnSelectOptions
+          isNotNull =
+            notnull == 1 || case columnDefMb of
+              Just columnDef -> columnIsNonNull columnDef
+              Nothing -> False
 
         ColumnEntry
           { column_name_gql = doubleXEncodeGql column_name
@@ -826,10 +831,8 @@ getColumnsFromParsedTableEntry connection tableEntry = do
           , isOmittable =
               (primary_key == 1 && T.isPrefixOf "int" (T.toLower datatype))
                 || P.isJust dflt_value
-          , notnull =
-              notnull == 1 || case columnDefMb of
-                Just columnDef -> columnIsNonNull columnDef
-                Nothing -> False
+                || P.not isNotNull
+          , notnull = isNotNull
           , -- See the comment on the `hidden` property of
             -- the `ColumnEntryRaw` type for an explanation.
             isGenerated = hidden == 2 || hidden == 3
@@ -952,7 +955,7 @@ sqlDataToAesonValue datatype sqlData = case sqlData of
       else Number $ P.fromIntegral int64 -- Int32
   SQLFloat double -> Number $ Scientific.fromFloatDigits double
   SQLText text -> String text
-  SQLBlob byteString -> String $ show byteString
+  SQLBlob _ -> Object $ KeyMap.singleton "type" "blob"
   SQLNull -> Null
 
 
