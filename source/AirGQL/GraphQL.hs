@@ -798,7 +798,7 @@ sqlDataToGQLValue datatype sqlData = case (datatype, sqlData) of
                 <> "Use a Number (64-bit float) or Text column instead."
   (_, SQLFloat double) -> pure $ Float double
   (_, SQLText text) -> pure $ String text
-  (_, SQLBlob _) -> Left "Cannot encode BLOB directly as gql"
+  (_, SQLBlob _) -> Left "Can't encode BLOB as a GraphQL value"
   (_, SQLNull) -> pure Null
 
 
