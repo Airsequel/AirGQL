@@ -809,7 +809,7 @@ getColumnsFromParsedTableEntry connection tableEntry = do
           columnDefMb = P.find (\d -> columnDefName d == column_name) columnDefs
           selectOpts = columnDefMb >>= columnSelectOptions
           isNotNull =
-            notnull == 1 || case columnDefMb of
+            notnull == 1 || primary_key == 1 || case columnDefMb of
               Just columnDef -> columnIsNonNull columnDef
               Nothing -> False
 

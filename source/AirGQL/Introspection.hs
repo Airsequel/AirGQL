@@ -1212,14 +1212,27 @@ getSchemaFieldOutput
 getSchemaFieldOutput dbId conn accessMode tables = do
   typesForTables <- forM tables $ \table -> do
     columns <- getColumns dbId conn table.name
-    fields <- forM columns $ \columnEntry -> do
+    fieldsIn <- forM columns $ \columnEntry -> do
       let colName = columnEntry.column_name_gql
       pure $
         createType
           colName
           "" -- TODO: Reactivate description when user can specify it
           [] -- No arguments
-          ( if columnEntry.notnull && not columnEntry.isOmittable
+          ( if columnEntry.isOmittable
+              then ["SCALAR"]
+              else ["NON_NULL", "SCALAR"]
+          )
+          (getFullDatatype columnEntry)
+
+    fieldsOut <- forM columns $ \columnEntry -> do
+      let colName = columnEntry.column_name_gql
+      pure $
+        createType
+          colName
+          "" -- TODO: Reactivate description when user can specify it
+          [] -- No arguments
+          ( if columnEntry.notnull
               then ["NON_NULL", "SCALAR"]
               else ["SCALAR"]
           )
@@ -1347,7 +1360,7 @@ getSchemaFieldOutput dbId conn accessMode tables = do
                         <> table.name
                         <> "\""
                   )
-                , ("fields", List fields)
+                , ("fields", List fieldsOut)
                 ]
            , requiresWrite $
               Object $
@@ -1438,7 +1451,7 @@ getSchemaFieldOutput dbId conn accessMode tables = do
                     ( "description"
                     , String $ "Input object for " <> table.name
                     )
-                  , ("inputFields", List fields)
+                  , ("inputFields", List fieldsIn)
                   ]
            , fieldEnumType
            , requiresWrite $
