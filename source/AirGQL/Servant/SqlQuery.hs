@@ -29,7 +29,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime, nominalDiffTimeToSeconds)
 import Database.SQLite.Simple qualified as SS
-import Language.SQL.SimpleSQL.Parse (ParseError (peFormattedError))
+import Language.SQL.SimpleSQL.Parse (prettyError)
 import Language.SQL.SimpleSQL.Syntax (Statement (CreateTable))
 import Servant.Server qualified as Servant
 import System.Timeout (timeout)
@@ -101,8 +101,8 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
         <> ")"
 
   validationErrors <- liftIO $ case parseSql sqlPost.query of
-    Left error -> pure [T.pack error.peFormattedError]
-    Right statement@(CreateTable _ _) ->
+    Left error -> pure [prettyError error]
+    Right statement@(CreateTable{}) ->
       SS.withConnection (getMainDbPath dbId) $ \conn ->
         lintTableCreationCode (Just conn) statement
     _ -> pure []

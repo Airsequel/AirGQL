@@ -90,11 +90,12 @@ import Language.SQL.SimpleSQL.Dialect (
     diBackquotedIden,
     diKeywords,
     diLimit,
-    diSquareBracketQuotedIden
+    diSquareBracketQuotedIden,
+    diWithoutRowidTables
   ),
   ansi2011,
  )
-import Language.SQL.SimpleSQL.Parse (ParseError, parseStatement)
+import Language.SQL.SimpleSQL.Parse (ParseError, parseStatement, prettyError)
 import Language.SQL.SimpleSQL.Pretty (prettyScalarExpr)
 import Language.SQL.SimpleSQL.Syntax (
   ColConstraint (ColCheckConstraint, ColNotNullConstraint),
@@ -317,7 +318,7 @@ getColumnNames connection tableName = do
 -- TODO: investigate whether we ever want to quote the result
 nameAsText :: SQL.Name -> Text
 nameAsText = \case
-  SQL.Name _ name -> T.pack name
+  SQL.Name _ name -> name
 
 
 getFirstName :: Maybe [SQL.Name] -> Maybe Text
@@ -378,7 +379,7 @@ getColumnCheckConstraint col_name = \case
       CheckConstraint
         { name = getFirstName names
         , columns = Just [col_name]
-        , predicate = T.pack $ prettyScalarExpr sqlite expr
+        , predicate = prettyScalarExpr sqlite expr
         }
   _ -> Nothing
 
@@ -388,7 +389,7 @@ tableCheckConstraints = \case
   SQL.TableConstraintDef names (SQL.TableCheckConstraint expr) ->
     [ CheckConstraint
         { name = getFirstName names
-        , predicate = T.pack $ prettyScalarExpr sqlite expr
+        , predicate = prettyScalarExpr sqlite expr
         , -- not sure how to do this properly
           columns = Nothing
         }
@@ -513,7 +514,7 @@ getTableUniqueIndexConstraints connection tableName = do
 
 getSqlObjectName :: Statement -> Maybe Text
 getSqlObjectName = \case
-  SQL.CreateTable names _ ->
+  SQL.CreateTable names _ _ ->
     names
       & P.head
       <&> nameAsText
@@ -538,7 +539,7 @@ collectTableConstraints connectionMb statement = do
     (Just conn, Just name) -> getTableUniqueIndexConstraints conn name
     _ -> pure []
   case statement of
-    CreateTable _ elements -> do
+    CreateTable _ elements _ -> do
       let referencesConstraintsEither =
             -- => [TableElemenet]
             elements
@@ -576,7 +577,7 @@ enrichTableEntry
   -> IO (P.Either Text TableEntry)
 enrichTableEntry connection tableEntry@(TableEntryRaw{..}) =
   case parseSql tableEntry.sql of
-    P.Left err -> pure $ P.Left (show err)
+    P.Left err -> pure $ P.Left (prettyError err)
     P.Right sqlStatement ->
       collectTableConstraints (Just connection) sqlStatement
         <&> P.fmap
@@ -660,8 +661,18 @@ lintTable allEntries parsed =
                       <> "This is not supported by SQLite:\n"
                       <> "https://www.sqlite.org/foreignkeys.html"
           )
+
+    withoutRowidWarning = case parsed.statement of
+      CreateTable names _ True
+        | Just name <- getFirstName (Just names) ->
+            pure $
+              "Table "
+                <> quoteText name
+                <> " does not have a rowid column. "
+                <> "Such tables are not currently supported by Airsequel."
+      _ -> []
   in
-    rowidReferenceWarnings
+    rowidReferenceWarnings <> withoutRowidWarning
 
 
 {-| Lint the sql code for creating a table
@@ -721,10 +732,8 @@ columnSelectOptions (ColumnDef _ _ _ colConstraints) =
             textOnlyOptions =
               options
                 <&> \case
-                  StringLit _ _ value ->
-                    T.pack value
-                  NumLit value ->
-                    T.pack value
+                  StringLit _ _ value -> value
+                  NumLit value -> value
                   _ -> "UNSUPPORTED"
           in
             Just (SelectOptions textOnlyOptions)
@@ -763,7 +772,7 @@ getColumnsFromParsedTableEntry connection tableEntry = do
 
   let
     tableElementsMb = case tableEntry.statement of
-      SQL.CreateTable _ tableElements ->
+      SQL.CreateTable _ tableElements _ ->
         Just tableElements
       _ -> Nothing
 
@@ -1261,14 +1270,13 @@ sqlite =
         ]
     , diBackquotedIden = True -- https://sqlite.org/lang_keywords.html
     , diSquareBracketQuotedIden = True -- https://sqlite.org/lang_keywords.html
+    , diWithoutRowidTables = True -- https://www.sqlite.org/withoutrowid.html
     }
 
 
 parseSql :: Text -> P.Either ParseError Statement
 parseSql sqlQuery =
-  parseStatement sqlite "" P.Nothing $
-    T.unpack $
-      sanitizeSql sqlQuery
+  parseStatement sqlite "" P.Nothing $ sanitizeSql sqlQuery
 
 
 newtype SQLPost = SQLPost

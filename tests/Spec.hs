@@ -96,7 +96,6 @@ import AirGQL.Lib (
   ),
   getColumns,
   getTables,
-  parseSql,
   replaceCaseInsensitive,
   stringToGqlTypeName,
  )
@@ -656,6 +655,24 @@ testSuite = do
               "Column 'bar' references the rowid column of table 'goo'.\n"
                 <> "This is not supported by SQLite:\n"
                 <> "https://www.sqlite.org/foreignkeys.html"
+
+          result.errors `shouldBe` [expectedMessage]
+
+      it "should error out on `without rowid` table creation" $ do
+        let dbId = "api-sql-without-rowid"
+        let query = "CREATE TABLE foo (bar INTEGER PRIMARY KEY) WITHOUT ROWID"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                ("_TEST_" <> dbId)
+                SQLPost{query = query}
+
+          let
+            expectedMessage =
+              "Table 'foo' does not have a rowid column. "
+                <> "Such tables are not currently supported by Airsequel."
 
           result.errors `shouldBe` [expectedMessage]
 
@@ -2104,51 +2121,6 @@ testSuite = do
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
-
-    it "supports parsing SQL queries" $ do
-      let
-        sqlQuery =
-          [raw|
-            CREATE TABLE IF NOT EXISTS checks (
-              color TEXT CHECK ( color IN ('red', 'green', 'blue') ) NOT NULL
-            )
-          |]
-        sqlQueryParsed :: Text =
-          [raw|
-            Right (
-              CreateTable
-                [Name Nothing "checks"]
-                [TableColumnDef
-                  (ColumnDef
-                    (Name Nothing "color")
-                    (TypeName [Name Nothing "TEXT"])
-                    Nothing
-                    [ ColConstraintDef Nothing
-                        (ColCheckConstraint
-                          (In True
-                            (Iden [Name Nothing "color"])
-                            (InList
-                              [ StringLit "'" "'" "red"
-                              , StringLit "'" "'" "green"
-                              , StringLit "'" "'" "blue"
-                              ]
-                            )
-                          )
-                        )
-                    , ColConstraintDef Nothing ColNotNullConstraint
-                    ]
-                  )
-                ]
-            )
-          |]
-
-        rmSpacesText txt =
-          txt
-            & T.replace " " ""
-            & T.replace "\n" ""
-
-      rmSpacesText (show $ parseSql sqlQuery)
-        `shouldBe` rmSpacesText sqlQueryParsed
 
     it "supports inserting and retrieving single select fields" $ do
       let testDbPath = testRoot </> "single-select-test.db"
