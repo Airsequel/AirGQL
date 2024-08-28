@@ -259,6 +259,8 @@ data ColumnEntry = ColumnEntry
   , isUnique :: Bool
   , isOmittable :: Bool
   -- ^ If column is NON NULL, but will be set automatically
+  , isReference :: Bool
+  -- ^ This will be `true` when the column is part of some REFERENCES constraint.
   , dflt_value :: Maybe Text
   , primary_key :: Bool
   }
@@ -809,6 +811,7 @@ getColumnsFromParsedTableEntry connection tableEntry = do
         , isGenerated = False
         , dflt_value = P.Nothing
         , primary_key = True
+        , isReference = False
         }
 
   let
@@ -845,6 +848,15 @@ getColumnsFromParsedTableEntry connection tableEntry = do
           , -- See the comment on the `hidden` property of
             -- the `ColumnEntryRaw` type for an explanation.
             isGenerated = hidden == 2 || hidden == 3
+          , isReference =
+              tableEntry.referencesConstraints
+                & P.any
+                  ( \constraint -> case constraint.columns of
+                      ImplicitColumns from -> from == column_name
+                      ExplicitColumns columns ->
+                        columns
+                          & P.any (\(from, _) -> from == column_name)
+                  )
           , ..
           }
     -- Views don't have a rowid column
