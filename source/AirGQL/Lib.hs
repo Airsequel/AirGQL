@@ -9,6 +9,8 @@ module AirGQL.Lib (
   AccessMode (..),
   ColumnEntry (..),
   GqlTypeName (..),
+  getEnrichedTable,
+  getColumnsFromParsedTableEntry,
   getColumns,
   getRowidColumnName,
   getTables,
@@ -869,51 +871,54 @@ getColumnsFromParsedTableEntry connection tableEntry = do
   pure $ rowidColumns <> entries
 
 
+getEnrichedTable :: Text -> Connection -> Text -> IO TableEntry
+getEnrichedTable dbId connection tableName = do
+  tables :: [TableEntryRaw] <-
+    SS.query
+      connection
+      [SS.sql|
+        SELECT name, tbl_name, type, rootpage, sql
+        FROM sqlite_master
+        WHERE name == ?
+      |]
+      [tableName]
+
+  table <- case P.head tables of
+    Just table -> pure table
+    Nothing ->
+      fail $
+        P.fold
+          [ "Could not find table info for table "
+          , T.unpack tableName
+          , " of db "
+          , T.unpack dbId
+          ]
+
+  enrichmentResultEither <- enrichTableEntry connection table
+  case enrichmentResultEither of
+    Right result -> pure result
+    Left err ->
+      fail $
+        P.fold
+          [ "An error occurred while parsing table "
+          , T.unpack tableName
+          , " of db "
+          , T.unpack dbId
+          , ": "
+          , T.unpack err
+          ]
+
+
 getColumns :: Text -> Connection -> Text -> IO [ColumnEntry]
-getColumns dbId connection tableName =
-  let
-    columns = do
-      tables :: [TableEntryRaw] <-
-        SS.query
-          connection
-          [SS.sql|
-            SELECT name, tbl_name, type, rootpage, sql
-            FROM sqlite_master
-            WHERE name == ?
-          |]
-          [tableName]
-
-      table <- case P.head tables of
-        Just table -> pure table
-        Nothing ->
-          fail $
-            P.fold
-              [ "Could not find table info for table "
-              , T.unpack tableName
-              , " of db "
-              , T.unpack dbId
-              ]
-
-      enrichmentResultEither <- enrichTableEntry connection table
-      enrichingResult <- case enrichmentResultEither of
-        Right result -> pure result
-        Left err ->
-          fail $
-            P.fold
-              [ "An error occurred while parsing table "
-              , T.unpack tableName
-              , " of db "
-              , T.unpack dbId
-              , ": "
-              , T.unpack err
-              ]
-      getColumnsFromParsedTableEntry connection enrichingResult
-  in
-    catchAll
-      columns
-      $ \err -> do
-        P.putErrText $ P.show err
-        pure []
+getColumns dbId conn tableName =
+  let columns = do
+        enrichingResult <- getEnrichedTable dbId conn tableName
+        getColumnsFromParsedTableEntry conn enrichingResult
+  in  catchAll
+        columns
+        $ \err -> do
+          P.putErrText $ P.show err
+          pure []
 
 
 newtype SelectOptions = SelectOptions {unSelectOptions :: [Text]}
