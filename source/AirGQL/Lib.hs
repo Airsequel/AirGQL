@@ -611,23 +611,29 @@ getEnrichedTables connection = do
 {-| SQLite allows references constraints to not specify the exact column they
 are referencing. This functions tries to recover that information by
 looking for primary keys among the columns of the referenced table.
-Note: we currently do not support having composite primary keys
-referenced implicitly, as that would lead to multiple complications like:
-- figuring out the correct order for the references
-- having to perform the "enrichTableEntry" computation in two separate passes
 -}
 resolveReferencesConstraint :: [TableEntry] -> Text -> Maybe Text
-resolveReferencesConstraint tables referencedTable =
-  -- => [(TableEntry, [ColumnEntry])]
-  tables
-    -- => Maybe (TableEntry, [ColumnEntry])
-    & P.find (\table -> table.tbl_name == referencedTable)
-    -- => Maybe [ColumnEntry]
-    <&> (\table -> table.columns)
-    -- => Maybe ColumnEntry
-    >>= P.find (\column -> column.primary_key)
-      -- => Maybe Text
-      <&> (.column_name)
+resolveReferencesConstraint tables referencedTable = do
+  table <-
+    P.find
+      (\table -> table.tbl_name == referencedTable)
+      tables
+  let columns = table.columns
+  let pks = P.filter (\column -> column.primary_key) columns
+  -- TODO: do we need to handle rowid columns that are called something else??
+  let nonRowidPks = P.filter (\column -> column.column_name /= "rowid") pks
+  case nonRowidPks of
+    [] -> pure "rowid"
+    [column] -> pure column.column_name
+    -- Note: we currently do not support having composite primary keys
+    -- referenced implicitly, as that would lead to multiple complications like:
+    -- - figuring out the correct order for the references
+    -- - having to perform the "enrichTableEntry" computation in two separate passes
+    --
+    -- Note 2: Is this that hard to handle? I think there's a good chance we could
+    -- do it as long as we keep track of the column order. Not sure it's worth the
+    -- hassle though...
+    _ -> Nothing
 
 
 --  See the docs for `resolveReferencesConstraint` for details

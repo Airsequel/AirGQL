@@ -274,6 +274,7 @@ testSuite = do
                 , isUnique = True
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
                 }
@@ -287,6 +288,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -300,6 +302,7 @@ testSuite = do
                 , isUnique = True
                 , isOmittable = False
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
                 }
@@ -313,6 +316,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = False
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -326,6 +330,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -339,6 +344,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -376,6 +382,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -412,6 +419,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = False
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -448,6 +456,7 @@ testSuite = do
                 , isUnique = False
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
                 }
@@ -479,6 +488,7 @@ testSuite = do
                 , isUnique = True
                 , isOmittable = True
                 , isGenerated = False
+                , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
                 }
