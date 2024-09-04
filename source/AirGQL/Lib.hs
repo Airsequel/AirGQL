@@ -364,7 +364,7 @@ tableUniqueConstraints = \case
         , columns = P.fmap nameAsText columns
         }
     ]
-  SQL.TableColumnDef (SQL.ColumnDef col_name _ _ constraints) ->
+  SQL.TableColumnDef (SQL.ColumnDef col_name _ constraints) ->
     P.mapMaybe (getColumnUniqueConstraint (nameAsText col_name)) constraints
   _ -> []
 
@@ -394,7 +394,7 @@ tableCheckConstraints = \case
           columns = Nothing
         }
     ]
-  SQL.TableColumnDef (SQL.ColumnDef col_name _ _ constraints) ->
+  SQL.TableColumnDef (SQL.ColumnDef col_name _ constraints) ->
     P.mapMaybe (getColumnCheckConstraint (nameAsText col_name)) constraints
   _ -> []
 
@@ -469,7 +469,7 @@ tableReferencesConstraints = \case
             , columns = columns
             }
         ]
-  SQL.TableColumnDef (SQL.ColumnDef col_name _ _ constraints) ->
+  SQL.TableColumnDef (SQL.ColumnDef col_name _ constraints) ->
     -- => [ColumnConstraint]
     constraints
       -- => [Either Text (Maybe ColumnConstraint)]
@@ -704,12 +704,12 @@ getRowidColumnName colNames
 
 
 columnDefName :: ColumnDef -> Text
-columnDefName (ColumnDef name _ _ _) = nameAsText name
+columnDefName (ColumnDef name _ _) = nameAsText name
 
 
 -- Computes whether a column is NOT NULL
 columnIsNonNull :: SQL.ColumnDef -> Bool
-columnIsNonNull (ColumnDef _ _ _ constraints) =
+columnIsNonNull (ColumnDef _ _ constraints) =
   let isNotNullConstraint = \case
         ColConstraintDef _ ColNotNullConstraint -> True
         _ -> False
@@ -719,7 +719,7 @@ columnIsNonNull (ColumnDef _ _ _ constraints) =
 -- For a single column, returns selectable values
 -- E.g. ("color", (SelectOptions ["red", "green", "blue"]))
 columnSelectOptions :: SQL.ColumnDef -> Maybe SelectOptions
-columnSelectOptions (ColumnDef _ _ _ colConstraints) =
+columnSelectOptions (ColumnDef _ _ colConstraints) =
   let
     getSelectOptions
       :: ColConstraintDef
@@ -1147,9 +1147,6 @@ sqlite =
         , "create"
         , "cross"
         , "current"
-        , "current_date"
-        , "current_time"
-        , "current_timestamp"
         , "database"
         , "default"
         , "deferrable"
