@@ -106,7 +106,7 @@ import AirGQL.Lib (
   AccessMode (ReadAndWrite, ReadOnly, WriteOnly),
   ColumnEntry (column_name, datatype, datatype_gql),
   GqlTypeName (root),
-  TableEntryRaw (name),
+  TableEntry (name),
   column_name_gql,
   getColumns,
  )
@@ -433,7 +433,7 @@ queryType
   :: Connection
   -> AccessMode
   -> Text
-  -> [TableEntryRaw]
+  -> [TableEntry]
   -> IO (Out.ObjectType IO)
 queryType connection accessMode dbId tables = do
   let
@@ -700,7 +700,7 @@ queryType connection accessMode dbId tables = do
     getResolvers :: IO (HashMap.HashMap Text (Resolver IO))
     getResolvers = do
       let
-        getTableTuple :: TableEntryRaw -> IO (Text, Resolver IO)
+        getTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getTableTuple table = do
           outField <- getOutField table.name
           pure
@@ -741,7 +741,7 @@ queryType connection accessMode dbId tables = do
   --   getTableTuples <&> HashMap.fromList
 
   resolvers <- getResolvers
-  schemaResolver <- getSchemaResolver dbId connection accessMode tables
+  schemaResolver <- getSchemaResolver accessMode tables
 
   -- resolversPrimaryKey <- getResolversPrimaryKey
   let
@@ -1092,7 +1092,7 @@ mutationType
   -> Integer
   -> AccessMode
   -> Text
-  -> [TableEntryRaw]
+  -> [TableEntry]
   -> IO (Maybe (Out.ObjectType IO))
 mutationType connection maxRowsPerTable accessMode dbId tables = do
   let
@@ -1229,7 +1229,6 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       columnEntries <- liftIO $ getColumns dbId connection tableName
 
       context <- ask
-
       let
         columnNames :: [Text]
         columnNames =
@@ -1602,7 +1601,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
     getMutationResolvers :: IO (HashMap.HashMap Text (Resolver IO))
     getMutationResolvers = do
       let
-        getInsertTableTuple :: TableEntryRaw -> IO (Text, Resolver IO)
+        getInsertTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getInsertTableTuple table = do
           outFieldInsertion <- getOutField table.name
           pure
@@ -1612,7 +1611,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 (executeDbInserts table.name)
             )
 
-        getUpdateTableTuple :: TableEntryRaw -> IO (Text, Resolver IO)
+        getUpdateTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getUpdateTableTuple table = do
           outFieldUpdate <- getOutFieldUpdate table.name
           pure
@@ -1622,7 +1621,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 (executeDbUpdates table.name)
             )
 
-        getDeleteTableTuple :: TableEntryRaw -> IO (Text, Resolver IO)
+        getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getDeleteTableTuple table = do
           outFieldDeletion <- getOutFieldDeletion table.name
           pure
@@ -1654,7 +1653,7 @@ getDerivedSchema
   :: SchemaConf
   -> Connection
   -> Text
-  -> [TableEntryRaw]
+  -> [TableEntry]
   -> IO (Schema IO)
 getDerivedSchema schemaConf connection dbId tables = do
   let sqlitePragmas = getSQLitePragmas schemaConf.pragmaConf

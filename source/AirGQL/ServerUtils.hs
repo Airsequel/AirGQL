@@ -26,7 +26,7 @@ import Language.GraphQL.JSON (graphql)
 import System.FilePath (pathSeparator, (</>))
 
 import AirGQL.GraphQL (getDerivedSchema)
-import AirGQL.Lib (getTables)
+import AirGQL.Lib (getEnrichedTables)
 import AirGQL.Types.SchemaConf (SchemaConf)
 import AirGQL.Types.Types (
   GQLResponse (GQLResponse, data_, errors),
@@ -49,23 +49,32 @@ executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
           else reqDir </> "main.sqlite"
 
   theConn <- SS.open dbFilePath
-  tables <- getTables theConn
-  schema <- getDerivedSchema schemaConf theConn dbIdOrPath tables
-  result <- graphql schema opNameMb vars query
-  SS.close theConn
-
-  case result of
-    Left errMsg -> do
-      errors <- sourceToList errMsg
+  tablesEither <- getEnrichedTables theConn
+  case tablesEither of
+    Left err ->
       pure $
         gqlResponseToObject $
           GQLResponse
             { data_ = Nothing
-            , errors =
-                Just $
-                  errors
-                    <&> ((\(Response _ errs) -> errs) >>> toList)
-                    & P.concat
-                    <&> (\(Error msg _ _) -> String msg)
+            , errors = Just [String err]
             }
-    Right response -> pure response
+    Right tables -> do
+      schema <- getDerivedSchema schemaConf theConn dbIdOrPath tables
+      result <- graphql schema opNameMb vars query
+      SS.close theConn
+
+      case result of
+        Left errMsg -> do
+          errors <- sourceToList errMsg
+          pure $
+            gqlResponseToObject $
+              GQLResponse
+                { data_ = Nothing
+                , errors =
+                    Just $
+                      errors
+                        <&> ((\(Response _ errs) -> errs) >>> toList)
+                        & P.concat
+                        <&> (\(Error msg _ _) -> String msg)
+                }
+        Right response -> pure response

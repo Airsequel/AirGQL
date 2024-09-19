@@ -7,6 +7,8 @@
 
 module AirGQL.Lib (
   AccessMode (..),
+  canRead,
+  canWrite,
   ColumnEntry (..),
   GqlTypeName (..),
   getEnrichedTable,
@@ -115,6 +117,16 @@ import Servant.Docs (ToSample (toSamples), singleSample)
 
 data AccessMode = ReadOnly | WriteOnly | ReadAndWrite
   deriving (Eq, Show)
+
+
+canRead :: AccessMode -> Bool
+canRead WriteOnly = False
+canRead _ = True
+
+
+canWrite :: AccessMode -> Bool
+canWrite ReadOnly = False
+canWrite _ = True
 
 
 data ObjectType = Table | Index | View | Trigger
