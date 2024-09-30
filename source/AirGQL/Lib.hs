@@ -36,6 +36,7 @@ module AirGQL.Lib (
   lintTableCreationCode,
   resolveReferencesConstraintColumns,
   resolveReferencesConstraint,
+  sqliteErrorToText,
 )
 where
 
@@ -689,7 +690,10 @@ lintTable allEntries parsed =
 
 An optional connection can be used to retrieve the existing db data, which
 is used for things like resolving implicit references constraints (where
-the primary key is not explicitly given)
+the primary key is not explicitly given).
+
+The connection is optional to allow calling this function on-the-fly when
+creating the initial table in a databse.
 -}
 lintTableCreationCode :: Maybe SS.Connection -> Statement -> IO [Text]
 lintTableCreationCode connectionMb statement = do
@@ -1309,3 +1313,19 @@ instance FromJSON SQLPost
 
 instance ToSample AirGQL.Lib.SQLPost where
   toSamples _ = singleSample $ SQLPost "SELECT * FROM users"
+
+
+-- | Converts an sql error to text, possibly adding airsequel-specific context.
+sqliteErrorToText :: SS.SQLError -> Text
+sqliteErrorToText error =
+  let
+    addendum = case SS.sqlErrorDetails error of
+      "database or disk is full" ->
+        Just $
+          "This might be caused by the database exceeding "
+            <> "the maximum page count for your current plan."
+      _ -> Nothing
+  in
+    show error <> case addendum of
+      Nothing -> ""
+      Just text -> "\n" <> text

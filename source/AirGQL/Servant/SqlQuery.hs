@@ -42,6 +42,7 @@ import AirGQL.Lib (
   lintTableCreationCode,
   parseSql,
   sqlDataToAesonValue,
+  sqliteErrorToText,
  )
 import AirGQL.Types.PragmaConf (PragmaConf, getSQLitePragmas)
 import AirGQL.Types.SqlQueryPostResult (
@@ -150,7 +151,7 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
           P.catches
             performSqlOperations
             [ P.Handler $
-                \(error :: SS.SQLError) -> pure $ Left $ show error
+                \(error :: SS.SQLError) -> pure $ Left $ sqliteErrorToText error
             , P.Handler $
                 \(error :: SS.ResultError) -> pure $ Left $ show error
             , P.Handler $

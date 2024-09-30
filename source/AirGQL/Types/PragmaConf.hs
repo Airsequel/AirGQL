@@ -7,10 +7,8 @@ where
 
 import Protolude (
   Bool (True),
-  IO,
   Int,
   Integer,
-  pure,
   show,
   ($),
   (<>),
