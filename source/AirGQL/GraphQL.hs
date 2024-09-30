@@ -1657,7 +1657,7 @@ getDerivedSchema
   -> [TableEntryRaw]
   -> IO (Schema IO)
 getDerivedSchema schemaConf connection dbId tables = do
-  sqlitePragmas <- getSQLitePragmas schemaConf.pragmaConf
+  let sqlitePragmas = getSQLitePragmas schemaConf.pragmaConf
   P.forM_ sqlitePragmas (execute_ connection)
 
   queries <- queryType connection schemaConf.accessMode dbId tables

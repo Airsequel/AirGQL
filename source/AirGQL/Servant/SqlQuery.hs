@@ -117,7 +117,7 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
           defaultConfig.sqlTimeoutTime
             * microsecondsPerSecond
 
-      sqlitePragmas <- liftIO $ getSQLitePragmas pragmaConf
+      let sqlitePragmas = getSQLitePragmas pragmaConf
 
       let
         performSqlOperations =

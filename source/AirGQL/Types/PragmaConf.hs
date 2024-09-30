@@ -36,13 +36,12 @@ defaultConf =
 
 
 -- | Get the SQLite pragmas to use for a database
-getSQLitePragmas :: PragmaConf -> IO [SS.Query]
-getSQLitePragmas pragConf = do
+getSQLitePragmas :: PragmaConf -> [SS.Query]
+getSQLitePragmas pragConf =
   let
     getPrag key value =
       SS.Query $ "PRAGMA " <> key <> " = " <> value
-
-  pure
+  in
     [ getPrag "case_sensitive_like" "True"
     , getPrag "foreign_keys" "True"
     , -- TODO: Check if this really works
@@ -50,7 +49,6 @@ getSQLitePragmas pragConf = do
     , getPrag "max_page_count" $ show @Int pragConf.maxPageCount
     , getPrag "recursive_triggers" $ show @Bool pragConf.allowRecursTrig
     , -- TODO: Reactivate after https://sqlite.org/forum/forumpost/d7b9a365e0
-      --       (Also activate in SqlQuery.hs)
       -- , getPrag "trusted_schema" "False"
       getPrag "writable_schema" "False"
     ]
