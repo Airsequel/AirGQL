@@ -2137,12 +2137,12 @@ testSuite = do
       conn <- open testDbPath
       let
         sqlQuery =
-          [raw|
-          CREATE TABLE IF NOT EXISTS checks (
-            color TEXT CHECK ( color IN ('red', 'green', 'blue') )
-          )
-        |]
-      execute_ conn $ SS.Query sqlQuery
+          [sql|
+            CREATE TABLE IF NOT EXISTS checks (
+              color TEXT CHECK ( color IN ('red', 'green', 'blue') )
+            )
+          |]
+      execute_ conn sqlQuery
       execute_ conn "DELETE FROM checks"
       execute_
         conn

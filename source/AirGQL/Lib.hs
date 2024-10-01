@@ -312,10 +312,10 @@ getTableNames connection = do
 getColumnNames :: Connection -> Text -> IO [Text]
 getColumnNames connection tableName = do
   results :: [SS.Only Text] <-
-    query_
+    SS.query
       connection
-      $ SS.Query
-      $ "SELECT name FROM pragma_table_xinfo(" <> quoteText tableName <> ")"
+      "SELECT name FROM pragma_table_xinfo(?)"
+      [tableName]
   pure (SS.fromOnly <$> results)
 
 
@@ -492,10 +492,10 @@ getTableUniqueIndexConstraints connection tableName = do
       ( SS.query
           connection
           [SS.sql|
-        SELECT sql
-        FROM sqlite_master
-        WHERE tbl_name = ? AND type = 'index'
-      |]
+            SELECT sql
+            FROM sqlite_master
+            WHERE tbl_name = ? AND type = 'index'
+          |]
           [tableName]
       )
       (\_ -> pure [])
@@ -760,20 +760,18 @@ getColumnsFromParsedTableEntry
   -> IO [ColumnEntry]
 getColumnsFromParsedTableEntry connection tableEntry = do
   keyColumns :: [[SQLData]] <-
-    query_ connection $
-      SS.Query $
-        "SELECT * FROM pragma_index_info("
-          <> quoteText tableEntry.tbl_name
-          <> ")"
+    SS.query
+      connection
+      "SELECT * FROM pragma_index_info(?)"
+      [tableEntry.tbl_name]
 
   -- TODO: Catch only SQL specific exceptions
   colEntriesRaw :: [ColumnEntryRaw] <-
     catchAll
-      ( query_ connection $
-          SS.Query $
-            "SELECT * FROM pragma_table_xinfo("
-              <> quoteText tableEntry.tbl_name
-              <> ")"
+      ( SS.query
+          connection
+          "SELECT * FROM pragma_table_xinfo(?)"
+          [tableEntry.tbl_name]
       )
       ( \exception -> do
           P.putErrText $ show exception
