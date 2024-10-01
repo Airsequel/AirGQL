@@ -1315,7 +1315,7 @@ instance ToSample AirGQL.Lib.SQLPost where
   toSamples _ = singleSample $ SQLPost "SELECT * FROM users"
 
 
--- | Converts an sql error to text, possibly adding airsequel-specific context.
+-- | Converts a SQL error to text, possibly adding airsequel-specific context.
 sqliteErrorToText :: SS.SQLError -> Text
 sqliteErrorToText error =
   let
