@@ -12,7 +12,6 @@ import Protolude (
   Monoid (mempty),
   Semigroup ((<>)),
   Text,
-  fromMaybe,
   ($),
   (&),
   (<&>),
@@ -58,7 +57,10 @@ typeNameResolver =
 
 
 columnTypeName :: ColumnEntry -> Text
-columnTypeName entry = fromMaybe "String" (columnType entry).name
+columnTypeName entry =
+  case entry.datatype_gql of
+    Nothing -> "String"
+    Just type_ -> type_.full
 
 
 columnType :: ColumnEntry -> IntrospectionType
@@ -284,7 +286,7 @@ tableUpdateField accessMode table = do
     & Type.withArguments
       [ Type.inputValue
           "set"
-          (Type.nonNull $ Type.nonNull updateRow)
+          (Type.nonNull updateRow)
           & Type.inputValueWithDescription "Fields to be updated"
       , Type.inputValue
           "filter"

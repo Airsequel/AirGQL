@@ -1,5 +1,6 @@
 module AirGQL.Introspection.Types (
   Schema (..),
+  Name,
   IntrospectionType (..),
   TypeKind (..),
   Field (..),
@@ -11,7 +12,6 @@ module AirGQL.Introspection.Types (
   withArguments,
   inputValue,
   inputValueWithDescription,
-  withName,
   withDescription,
   fieldWithDescription,
   scalar,
@@ -46,6 +46,7 @@ import Protolude (
   execState,
   for_,
   not,
+  pure,
   show,
   when,
   ($),
@@ -126,47 +127,83 @@ typeDirectiveLocation =
     ]
 
 
-data TypeKind = Scalar | Object | Enum | InputObject | List | NonNull
+-- | The name of a graphql type.
+type Name = Text
+
+
+data TypeKind
+  = Scalar Name
+  | Object Name [Field]
+  | Enum Name [EnumValue]
+  | InputObject Name [InputValue]
+  | List IntrospectionType
+  | NonNull IntrospectionType
   deriving (Show, Generic)
-
-
--- $(deriveToGraphQL ''TypeKind)
-instance ToGraphQL TypeKind where
-  toGraphQL Scalar = Value.Enum "SCALAR"
-  toGraphQL Object = Value.Enum "OBJECT"
-  toGraphQL Enum = Value.Enum "ENUM"
-  toGraphQL InputObject = Value.Enum "INPUT_OBJECT"
-  toGraphQL List = Value.Enum "LIST"
-  toGraphQL NonNull = Value.Enum "NON_NULL"
 
 
 data IntrospectionType = IType
   { kind :: TypeKind
-  , name :: Maybe Text
   , description :: Maybe Text
-  , interfaces :: Maybe [IntrospectionType]
-  , possibleTypes :: Maybe [IntrospectionType]
-  , fields :: Maybe [Field]
-  , inputFields :: Maybe [InputValue]
-  , enumValues :: Maybe [EnumValue]
-  , ofType :: Maybe IntrospectionType
   }
   deriving (Show, Generic)
 
 
 instance ToGraphQL IntrospectionType where
-  toGraphQL ty =
+  toGraphQL ty = do
     Value.Object $
       HashMap.fromList
-        [ ("kind", toGraphQL ty.kind)
-        , ("name", toGraphQL ty.name)
+        [
+          ( "kind"
+          , case ty.kind of
+              Scalar _ -> Value.Enum "SCALAR"
+              Object _ _ -> Value.Enum "OBJECT"
+              Enum _ _ -> Value.Enum "ENUM"
+              InputObject _ _ -> Value.Enum "INPUT_OBJECT"
+              List _ -> Value.Enum "LIST"
+              NonNull _ -> Value.Enum "NON_NULL"
+          )
+        ,
+          ( "name"
+          , case ty.kind of
+              Scalar name -> Value.String name
+              Object name _ -> Value.String name
+              Enum name _ -> Value.String name
+              InputObject name _ -> Value.String name
+              _ -> Value.Null
+          )
         , ("description", toGraphQL ty.description)
-        , ("interfaces", toGraphQL ty.interfaces)
-        , ("possibleTypes", toGraphQL ty.possibleTypes)
-        , ("fields", toGraphQL ty.fields)
-        , ("enumValues", toGraphQL ty.enumValues)
-        , ("inputFields", toGraphQL ty.inputFields)
-        , ("ofType", toGraphQL ty.ofType)
+        ,
+          ( "interfaces"
+          , case ty.kind of
+              Object _ _ -> Value.List []
+              _ -> Value.Null
+          )
+        , ("possibleTypes", Value.Null)
+        ,
+          ( "fields"
+          , case ty.kind of
+              Object _ fields -> toGraphQL fields
+              _ -> Value.Null
+          )
+        ,
+          ( "enumValues"
+          , case ty.kind of
+              Enum _ variants -> toGraphQL variants
+              _ -> Value.Null
+          )
+        ,
+          ( "inputFields"
+          , case ty.kind of
+              InputObject _ fields -> toGraphQL fields
+              _ -> Value.Null
+          )
+        ,
+          ( "ofType"
+          , case ty.kind of
+              NonNull inner -> toGraphQL inner
+              List inner -> toGraphQL inner
+              _ -> Value.Null
+          )
         ]
 
 
@@ -199,67 +236,32 @@ typeIntrospectionType =
     ]
 
 
-emptyType :: TypeKind -> IntrospectionType
-emptyType kind =
+mkType :: TypeKind -> IntrospectionType
+mkType kind =
   IType
     { kind
-    , name = Nothing
     , description = Nothing
-    , interfaces = Nothing
-    , possibleTypes = Nothing
-    , fields = Nothing
-    , enumValues = Nothing
-    , inputFields = Nothing
-    , ofType = Nothing
     }
 
 
 nonNull :: IntrospectionType -> IntrospectionType
-nonNull ty =
-  (emptyType NonNull)
-    { ofType = Just ty
-    }
+nonNull ty = mkType $ NonNull ty
 
 
 list :: IntrospectionType -> IntrospectionType
-list ty =
-  (emptyType List)
-    { ofType = Just ty
-    }
+list ty = mkType $ List ty
 
 
 object :: Text -> [Field] -> IntrospectionType
-object name fields =
-  (emptyType Object)
-    { fields = Just fields
-    , name = Just name
-    , interfaces = Just []
-    }
+object name fields = mkType $ Object name fields
 
 
 inputObject :: Text -> [InputValue] -> IntrospectionType
-inputObject name fields =
-  (emptyType InputObject)
-    { inputFields = Just fields
-    , name = Just name
-    , interfaces = Just []
-    }
+inputObject name fields = mkType $ InputObject name fields
 
 
 enum :: Text -> [EnumValue] -> IntrospectionType
-enum name variants =
-  (emptyType Enum)
-    { enumValues = Just variants
-    , name = Just name
-    }
-
-
-withName :: Text -> IntrospectionType -> IntrospectionType
-withName newName (IType{..}) =
-  IType
-    { name = Just newName
-    , ..
-    }
+enum name variants = mkType $ Enum name variants
 
 
 withDescription :: Text -> IntrospectionType -> IntrospectionType
@@ -271,9 +273,7 @@ withDescription newDesc (IType{..}) =
 
 
 scalar :: Text -> IntrospectionType
-scalar tyName =
-  emptyType Scalar
-    & withName tyName
+scalar tyName = mkType $ Scalar tyName
 
 
 data Field = Field
@@ -463,19 +463,24 @@ collectSchemaTypes schema = do
 -- | Collect a map of all the named types occurring inside a type
 collectTypes :: IntrospectionType -> State (HashMap Text IntrospectionType) ()
 collectTypes ty = do
-  for_ ty.ofType collectTypes
-  for_ ty.name $ \name -> do
-    current <- get
-    when (not $ HashMap.member name current) $ do
-      put $ HashMap.insert name ty current
-      for_ ty.interfaces $ \interfaces -> do
-        for_ interfaces collectTypes
-      for_ ty.possibleTypes $ \possibleTypes -> do
-        for_ possibleTypes collectTypes
-      for_ ty.inputFields $ \inputFields -> do
-        for_ inputFields $ \thisField -> collectTypes thisField.type_
-      for_ ty.fields $ \fields -> do
-        for_ fields $ \thisField -> do
-          collectTypes thisField.type_
-          for_ thisField.args $ \arg ->
-            collectTypes arg.type_
+  -- Gives a name to the current type, and saves it.
+  --
+  -- If the type hadn't been found already, runs a custom continuation.
+  let insertType name continue = do
+        current <- get
+        when (not $ HashMap.member name current) $ do
+          put $ HashMap.insert name ty current
+          continue
+
+  case ty.kind of
+    NonNull inner -> collectTypes inner
+    List inner -> collectTypes inner
+    Enum name _ -> insertType name $ pure ()
+    Scalar name -> insertType name $ pure ()
+    Object name fields -> insertType name $ do
+      for_ fields $ \thisField -> do
+        collectTypes thisField.type_
+        for_ thisField.args $ \arg ->
+          collectTypes arg.type_
+    InputObject name fields -> insertType name $ do
+      for_ fields $ \thisField -> collectTypes thisField.type_
