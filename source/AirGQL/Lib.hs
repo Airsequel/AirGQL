@@ -171,6 +171,13 @@ instance ToJSON TableEntryRaw
 instance FromRow TableEntryRaw
 
 
+data PrimaryKeyConstraint = PrimaryKeyConstraint
+  { name :: Maybe Text
+  , columns :: [Text]
+  }
+  deriving (Show, Eq, Generic)
+
+
 data UniqueConstraint = UniqueConstraint
   { name :: Maybe Text
   , columns :: [Text]
@@ -225,6 +232,7 @@ data TableEntry = TableEntry
   , uniqueConstraints :: [UniqueConstraint]
   , referencesConstraints :: [ReferencesConstraint]
   , checkConstraints :: [CheckConstraint]
+  , primaryKeyConstraints :: [PrimaryKeyConstraint]
   , columns :: [ColumnEntry]
   }
   deriving (Show, Eq, Generic)
@@ -270,6 +278,7 @@ data ColumnEntry = ColumnEntry
   , datatype_gql :: Maybe GqlTypeName
   , select_options :: Maybe [Text]
   , notnull :: Bool
+  , isRowid :: Bool
   , isGenerated :: Bool
   , isUnique :: Bool
   , isOmittable :: Bool
@@ -289,6 +298,7 @@ data ParsedTable = ParsedTable
   { uniqueConstraints :: [UniqueConstraint]
   , referencesConstraints :: [ReferencesConstraint]
   , checkConstraints :: [CheckConstraint]
+  , primaryKeyConstraints :: [PrimaryKeyConstraint]
   , statement :: Statement
   }
   deriving (Show, Eq, Generic)
@@ -356,13 +366,6 @@ getColumnUniqueConstraint col_name = \case
         { name = getFirstName names
         , columns = [col_name]
         }
-  -- Primary keys are unique by default, even though they do not have an unique index
-  SQL.ColConstraintDef names (SQL.ColPrimaryKeyConstraint _) ->
-    Just $
-      UniqueConstraint
-        { name = getFirstName names
-        , columns = [col_name]
-        }
   _ -> Nothing
 
 
@@ -374,16 +377,44 @@ tableUniqueConstraints = \case
         , columns = P.fmap nameAsText columns
         }
     ]
-  -- Primary keys are unique by default, even though they do not have an unique index
+  SQL.TableColumnDef (SQL.ColumnDef col_name _ constraints) ->
+    P.mapMaybe (getColumnUniqueConstraint (nameAsText col_name)) constraints
+  _ -> []
+
+
+getColumnPKConstraint
+  :: Text
+  -> SQL.ColConstraintDef
+  -> Maybe PrimaryKeyConstraint
+getColumnPKConstraint col_name = \case
+  SQL.ColConstraintDef names (SQL.ColPrimaryKeyConstraint _) ->
+    Just $
+      PrimaryKeyConstraint
+        { name = getFirstName names
+        , columns = [col_name]
+        }
+  _ -> Nothing
+
+
+tablePKConstraints :: SQL.TableElement -> [PrimaryKeyConstraint]
+tablePKConstraints = \case
   SQL.TableConstraintDef names (SQL.TablePrimaryKeyConstraint columns) ->
-    [ UniqueConstraint
+    [ PrimaryKeyConstraint
         { name = getFirstName names
         , columns = P.fmap nameAsText columns
         }
     ]
   SQL.TableColumnDef (SQL.ColumnDef col_name _ constraints) ->
-    P.mapMaybe (getColumnUniqueConstraint (nameAsText col_name)) constraints
+    P.mapMaybe (getColumnPKConstraint (nameAsText col_name)) constraints
   _ -> []
+
+
+pkConstraintToUniqueConstraint :: PrimaryKeyConstraint -> UniqueConstraint
+pkConstraintToUniqueConstraint pk =
+  UniqueConstraint
+    { name = pk.name
+    , columns = pk.columns
+    }
 
 
 getColumnCheckConstraint
@@ -567,14 +598,21 @@ collectTableConstraints connectionMb statement = do
               -- =>  Either Text [TableElemenet]
               & P.fmap P.join
 
+      let pkConstraints = elements >>= tablePKConstraints
+      let uniqueConstraints =
+            uniqueIndices
+              <> (elements >>= tableUniqueConstraints)
+              -- Primary keys are unique by default,
+              -- even though they do not have an unique index
+              <> (pkConstraints <&> pkConstraintToUniqueConstraint)
+
       P.for referencesConstraintsEither $ \referencesConstraints -> do
         pure $
           ParsedTable
-            { uniqueConstraints =
-                uniqueIndices
-                  <> (elements >>= tableUniqueConstraints)
+            { uniqueConstraints = uniqueConstraints
             , referencesConstraints = referencesConstraints
             , checkConstraints = elements >>= tableCheckConstraints
+            , primaryKeyConstraints = pkConstraints
             , statement = statement
             }
     _ ->
@@ -584,6 +622,7 @@ collectTableConstraints connectionMb statement = do
             { uniqueConstraints = uniqueIndices
             , referencesConstraints = []
             , checkConstraints = []
+            , primaryKeyConstraints = []
             , statement = statement
             }
 
@@ -633,8 +672,7 @@ resolveReferencesConstraint tables referencedTable = do
       tables
   let columns = table.columns
   let pks = P.filter (\column -> column.primary_key) columns
-  -- TODO: do we need to handle rowid columns that are called something else??
-  let nonRowidPks = P.filter (\column -> column.column_name /= "rowid") pks
+  let nonRowidPks = P.filter (\column -> column.isRowid) pks
   case nonRowidPks of
     [] -> pure "rowid"
     [column] -> pure column.column_name
@@ -694,8 +732,15 @@ lintTable allEntries parsed =
                 <> " does not have a rowid column. "
                 <> "Such tables are not currently supported by Airsequel."
       _ -> []
+
+    illegalName = case parsed.statement of
+      CreateTable names _ _
+        | Just name <- getFirstName (Just names)
+        , "_by_pk" `isInfixOf` name ->
+            pure "Table names cannot contain \"_by_pk\""
+      _ -> []
   in
-    rowidReferenceWarnings <> withoutRowidWarning
+    rowidReferenceWarnings <> withoutRowidWarning <> illegalName
 
 
 {-| Lint the sql code for creating a table
@@ -834,6 +879,7 @@ getColumnsFromParsedTableEntry connection tableEntry = do
         , dflt_value = P.Nothing
         , primary_key = True
         , isReference = False
+        , isRowid = True
         }
 
   let
@@ -861,7 +907,11 @@ getColumnsFromParsedTableEntry connection tableEntry = do
               P.any
                 (\constraint -> column_name `P.elem` constraint.columns)
                 tableEntry.uniqueConstraints
-          , primary_key = primary_key == 1
+          , primary_key =
+              primary_key == 1
+                || P.any
+                  (\constraint -> column_name `P.elem` constraint.columns)
+                  tableEntry.primaryKeyConstraints
           , isOmittable =
               (primary_key == 1 && T.isPrefixOf "int" (T.toLower datatype))
                 || P.isJust dflt_value
@@ -879,6 +929,7 @@ getColumnsFromParsedTableEntry connection tableEntry = do
                         columns
                           & P.any (\(from, _) -> from == column_name)
                   )
+          , isRowid = False
           , ..
           }
     -- Views don't have a rowid column
