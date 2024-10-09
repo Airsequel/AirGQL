@@ -30,10 +30,6 @@ module AirGQL.Introspection.Types (
   deprecatedEnumValue,
 ) where
 
-import Data.HashMap.Strict (HashMap)
-import Data.HashMap.Strict qualified as HashMap
-import Language.GraphQL.Class (ToGraphQL (toGraphQL))
-import Language.GraphQL.Type qualified as Value
 import Protolude (
   Bool (False, True),
   Generic,
@@ -51,7 +47,13 @@ import Protolude (
   when,
   ($),
   (&),
+  (<>),
  )
+
+import Data.HashMap.Strict (HashMap)
+import Data.HashMap.Strict qualified as HashMap
+import Language.GraphQL.Class (ToGraphQL (toGraphQL))
+import Language.GraphQL.Type qualified as Value
 
 
 data Schema = Schema
@@ -334,7 +336,7 @@ field fieldName fieldType =
 
 
 withArguments :: [InputValue] -> Field -> Field
-withArguments argList (Field{..}) = Field{args = argList, ..}
+withArguments argList (Field{..}) = Field{args = args <> argList, ..}
 
 
 data InputValue = InputValue
@@ -448,6 +450,9 @@ typeBool :: IntrospectionType
 typeBool = scalar "Boolean"
 
 
+{-| Updates the `types` property of a schema to reference
+every type contained in other parts of the schema.
+-}
 collectSchemaTypes :: Schema -> Schema
 collectSchemaTypes schema = do
   let basic = [typeInt, typeString, typeBool, typeSchema]

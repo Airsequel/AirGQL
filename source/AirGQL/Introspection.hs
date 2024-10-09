@@ -30,7 +30,7 @@ import AirGQL.Introspection.Types (IntrospectionType)
 import AirGQL.Introspection.Types qualified as Type
 import AirGQL.Lib (
   AccessMode,
-  ColumnEntry,
+  ColumnEntry (isRowid, primary_key),
   GqlTypeName (full),
   TableEntry (columns, name),
   canRead,
@@ -41,6 +41,7 @@ import AirGQL.Lib (
   notnull,
  )
 import Control.Monad (MonadFail (fail))
+import Data.List qualified as List
 import Data.Text qualified as T
 import DoubleXEncoding (doubleXEncodeGql)
 import Language.GraphQL.Class (ToGraphQL (toGraphQL))
@@ -130,39 +131,80 @@ tableRowType table = do
   Type.object (doubleXEncodeGql table.name <> "_row") fields
 
 
+tableQueryCommonArgs :: TableEntry -> [Type.InputValue]
+tableQueryCommonArgs table =
+  let
+    fieldsWithOrderingTerm =
+      table.columns <&> \columnEntry -> do
+        let colName = columnEntry.column_name_gql
+        Type.inputValue colName orderingTermType
+
+    orderType =
+      Type.inputObject
+        (doubleXEncodeGql table.name <> "_order_by")
+        fieldsWithOrderingTerm
+        & Type.withDescription
+          ( "Ordering options when selecting data from \""
+              <> table.name
+              <> "\"."
+          )
+  in
+    [ Type.inputValue "filter" (filterType table)
+        & Type.inputValueWithDescription "Filter to select specific rows"
+    , Type.inputValue "order_by" (Type.list orderType)
+        & Type.inputValueWithDescription "Columns used to sort the data"
+    , Type.inputValue "limit" Type.typeInt
+        & Type.inputValueWithDescription "Limit the number of returned rows"
+    , Type.inputValue "offset" Type.typeInt
+        & Type.inputValueWithDescription "The index to start returning rows from"
+    ]
+
+
 tableQueryField :: TableEntry -> Type.Field
-tableQueryField table = do
-  let tableName = table.name
+tableQueryField table =
+  Type.field
+    (doubleXEncodeGql table.name)
+    (Type.nonNull $ Type.list $ Type.nonNull $ tableRowType table)
+    & Type.fieldWithDescription ("Rows from the table \"" <> table.name <> "\"")
+    & Type.withArguments (tableQueryCommonArgs table)
 
-  let fieldsWithOrderingTerm =
-        table.columns <&> \columnEntry -> do
-          let colName = columnEntry.column_name_gql
-          Type.inputValue colName orderingTermType
 
-  let orderType =
-        Type.inputObject
-          (doubleXEncodeGql tableName <> "_order_by")
-          fieldsWithOrderingTerm
-          & Type.withDescription
-            ( "Ordering options when selecting data from \""
-                <> table.name
-                <> "\"."
-            )
+restrictedArgNames :: [Text]
+restrictedArgNames = ["limit", "offset", "order_by", "filter"]
+
+
+mkArgName :: Text -> Text
+mkArgName name = do
+  let encoded = doubleXEncodeGql name
+  if P.elem encoded restrictedArgNames
+    then encoded <> "_"
+    else encoded
+
+
+tableQueryByPk :: TableEntry -> Type.Field
+tableQueryByPk table = do
+  let pks = List.filter (\col -> col.primary_key) table.columns
+
+  -- We filter out the rowid column, unless it is the only one
+  let withoutRowid = case pks of
+        [first] | first.isRowid -> [first]
+        _ -> List.filter (\col -> P.not col.isRowid) pks
+
+  let pkArguments =
+        withoutRowid <&> \column -> do
+          let name = mkArgName column.column_name_gql
+          Type.inputValue name $ Type.nonNull $ columnType column
 
   Type.field
-    (doubleXEncodeGql tableName)
-    (Type.nonNull $ Type.list $ Type.nonNull $ tableRowType table)
-    & Type.fieldWithDescription ("Rows from the table \"" <> tableName <> "\"")
-    & Type.withArguments
-      [ Type.inputValue "filter" (filterType table)
-          & Type.inputValueWithDescription "Filter to select specific rows"
-      , Type.inputValue "order_by" (Type.list orderType)
-          & Type.inputValueWithDescription "Columns used to sort the data"
-      , Type.inputValue "limit" Type.typeInt
-          & Type.inputValueWithDescription "Limit the number of returned rows"
-      , Type.inputValue "offset" Type.typeInt
-          & Type.inputValueWithDescription "The index to start returning rows from"
-      ]
+    (doubleXEncodeGql table.name <> "_by_pk")
+    (tableRowType table)
+    & Type.fieldWithDescription
+      ( "Rows from the table \""
+          <> table.name
+          <> "\", accessible by their primary key"
+      )
+    & Type.withArguments (tableQueryCommonArgs table)
+    & Type.withArguments pkArguments
 
 
 mutationResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
@@ -318,7 +360,11 @@ getSchema accessMode tables = do
   let
     queryType =
       if canRead accessMode
-        then tables <&> tableQueryField
+        then
+          P.fold
+            [ tables <&> tableQueryField
+            , tables <&> tableQueryByPk
+            ]
         else []
 
     mutationType =
