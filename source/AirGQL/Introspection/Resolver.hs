@@ -1,4 +1,8 @@
-module AirGQL.Introspection.Resolver (makeType, makeConstField) where
+module AirGQL.Introspection.Resolver (
+  makeType,
+  makeConstField,
+  makeField,
+) where
 
 import Protolude (
   Either (Left),
@@ -7,7 +11,6 @@ import Protolude (
   MonadReader (ask),
   Text,
   fromMaybe,
-  mempty,
   pure,
   show,
   ($),
@@ -29,6 +32,12 @@ import Language.GraphQL.Type.Out qualified as Out
 type Result = Either Text
 
 
+{-| Turns a type descriptor into a graphql output type, erroring out on input
+types. Child resolvers look up their respective fields in the value produced by
+their parent.
+
+Lookups for `__Type` objects are memoized, and a maximum depth of 30 is enforced.
+-}
 makeType :: IType.IntrospectionType -> Result (Out.Type IO)
 makeType =
   let
@@ -91,8 +100,7 @@ makeType =
             $ Out.NamedObjectType
             $ Type.ObjectType
               name
-              -- ty.description
-              P.Nothing
+              ty.description
               []
             $ HashMap.fromList
             $ ("__typename", typenameResolver) : resolvers
@@ -131,13 +139,29 @@ makeType =
     makeTypeWithDepth 0
 
 
+{-| Turns a field descriptor into a graphql field. See the documentation
+for `makeType` for details about the behaviour of child resolvers.
+-}
+makeField :: IType.Field -> Result (Out.Field IO)
+makeField field = do
+  args <- P.for field.args $ \arg -> do
+    ty <- makeInType arg.type_
+    pure (arg.name, In.Argument arg.description ty arg.defaultValue)
+  ty <- makeType field.type_
+  pure $ Out.Field field.description ty $ HashMap.fromList args
+
+
+-- | Create a resolver by calling which always returns a constant value.
 makeConstField :: IType.Field -> Type.Value -> Result (Out.Resolver IO)
 makeConstField field value = do
-  ty <- makeType field.type_
-  let gqlField = Out.Field field.description ty mempty
+  gqlField <- makeField field
   pure $ Out.ValueResolver gqlField $ pure value
 
 
+{-| The input-type version of `makeOutType`. No maximum depth is enforced, nor
+is any memoization used. This is the case because input types are usually pretty
+shallow.
+-}
 makeInType :: IType.IntrospectionType -> Result In.Type
 makeInType ty = do
   case ty.kind of

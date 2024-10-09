@@ -75,7 +75,7 @@ import Language.GraphQL.Type as GQL (
   EnumValue (EnumValue),
   InputField (InputField),
   Resolver (EventStreamResolver, ValueResolver),
-  ScalarType,
+  ScalarType (ScalarType),
   Schema,
   Value (Boolean, Enum, Float, Int, List, Null, Object, String),
   boolean,
@@ -101,12 +101,15 @@ import AirGQL.GQLWrapper (
   inArgumentToArgument,
   outFieldToField,
  )
+
 import AirGQL.Introspection (getSchemaResolver, typeNameResolver)
+import AirGQL.Introspection qualified as Introspection
+import AirGQL.Introspection.Resolver qualified as Introspection
 import AirGQL.Lib (
   AccessMode (ReadAndWrite, ReadOnly, WriteOnly),
   ColumnEntry (column_name, datatype, datatype_gql),
   GqlTypeName (root),
-  TableEntry (name),
+  TableEntry (columns, name),
   column_name_gql,
   getColumns,
  )
@@ -120,10 +123,14 @@ import AirGQL.Types.SchemaConf (
  )
 import AirGQL.Types.Utils (encodeToText)
 import AirGQL.Utils (colToFileUrl, collectErrorList, quoteKeyword, quoteText)
+import Data.Either.Extra qualified as Either
 
 
 typeNameToScalarType :: Maybe GqlTypeName -> ScalarType
-typeNameToScalarType Nothing = string
+typeNameToScalarType Nothing =
+  ScalarType
+    "any"
+    (Just "A type that could result to any kind of GQL scalar")
 typeNameToScalarType (Just typeName) =
   case typeName.root of
     "Int" -> int
@@ -195,13 +202,7 @@ colNamesWithValResolver columnEntries =
           Object obj ->
             case obj & HashMap.lookup colEntry.column_name_gql of
               Nothing -> String "Error: Field does not exist"
-              Just val ->
-                case colEntry.datatype of
-                  -- Coerce value to nullable String
-                  -- if no datatype is set.
-                  -- This happens for columns in views.
-                  "" -> gqlValueToNullableString val
-                  _ -> val
+              Just val -> val
           _ -> String "Error: Value could not be retrieved"
     in
       ( colEntry.column_name_gql
@@ -441,141 +442,15 @@ queryType connection accessMode dbId tables = do
     documentation =
       "Available queries for database \"" <> dbId <> "\""
 
-    getOutField :: Text -> IO (Out.Field IO)
-    getOutField tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
+    getOutField :: TableEntry -> IO (Out.Field IO)
+    getOutField table =
+      case Introspection.makeField $ Introspection.tableQueryField table of
+        Left err -> P.throwIO $ userError $ T.unpack err
+        Right result -> pure result
 
-      let
-        colNamesWithOrderingTerm :: [(Text, InputField)]
-        colNamesWithOrderingTerm =
-          columnEntries <&> \colEntry ->
-            ( colEntry.column_name_gql
-            , InputField
-                (Just $ "Ordering term for " <> colEntry.column_name_gql)
-                ( In.NamedEnumType $
-                    EnumType
-                      "OrderingTerm"
-                      (Just "Ordering object for the column")
-                      ( HashMap.fromList
-                          [ ("ASC", EnumValue (Just "ASC"))
-                          , ("asc", EnumValue (Just "ASC"))
-                          , ("DESC", EnumValue (Just "DESC"))
-                          , ("desc", EnumValue (Just "DESC"))
-                          ]
-                      )
-                )
-                Nothing -- Default value
-            )
-
-        typeNameField :: Text -> [(Text, Resolver IO)]
-        typeNameField nameOfTable =
-          let
-            typeNameOutField =
-              outFieldToField $
-                OutField
-                  { descriptionMb = Just $ "The type name of " <> nameOfTable
-                  , fieldType = Out.NonNullScalarType string
-                  , arguments = HashMap.empty
-                  }
-          in
-            [
-              ( "__typename"
-              , ValueResolver typeNameOutField $
-                  pure $
-                    String $
-                      doubleXEncodeGql nameOfTable <> "_row"
-              )
-            ]
-
-      pure $
-        outFieldToField $
-          OutField
-            { descriptionMb = Just $ "Provides entries from " <> tableName
-            , fieldType =
-                Out.ListType $
-                  Out.NamedObjectType $
-                    Out.ObjectType
-                      tableName
-                      (Just "short desc")
-                      []
-                      ( HashMap.fromList $
-                          colNamesWithValResolver columnEntries
-                            <> typeNameField tableName
-                      )
-            , arguments =
-                HashMap.fromList
-                  [
-                    ( "filter"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb = Just "Filter objects"
-                          , argType =
-                              NamedInputObjectType $
-                                InputObjectType
-                                  (doubleXEncodeGql tableName <> "_filter")
-                                  ( Just
-                                      "Filter objects for the specified columns"
-                                  )
-                                  (HashMap.fromList (colNamesWithFilterField tableName columnEntries))
-                          , valueMb = Nothing
-                          }
-                    )
-                  ,
-                    ( "order_by"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb = Just "Order by the specified columns"
-                          , argType =
-                              In.ListType $
-                                In.NamedInputObjectType $
-                                  InputObjectType
-                                    (doubleXEncodeGql tableName <> "_order_by")
-                                    (Just "Options for ordering by columns")
-                                    (HashMap.fromList colNamesWithOrderingTerm)
-                          , valueMb = Nothing
-                          }
-                    )
-                  ,
-                    ( "limit"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb =
-                              Just "Limit the number of returned rows."
-                          , argType = In.NamedScalarType int
-                          , valueMb = Nothing
-                          }
-                    )
-                  ,
-                    ( "offset"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb =
-                              Just
-                                "Change the index rows \
-                                \start being returned from"
-                          , argType = In.NamedScalarType int
-                          , valueMb = Nothing
-                          }
-                    )
-                  ]
-            }
-    -- -- TODO: Use for retrieving record by primary key
-    -- , arguments = HashMap.fromList $ columnEntries
-    --     <&> (\colEntry ->
-    --           ( colEntry.column_name_gql :: Text
-    --           , inArgumentToArgument $ InArgument
-    --               { argDescMb = Just "Retrieve object by primary key"
-    --               , argType = In.NamedScalarType $
-    --                   typeNameToScalarType $ colEntry.datatype
-    --               , valueMb = Nothing
-    --               }
-    --           )
-    --         )
-
-    getDbEntries :: Text -> Out.Resolve IO
-    getDbEntries tableName = do
+    getDbEntries :: TableEntry -> Out.Resolve IO
+    getDbEntries table = do
       context <- ask
-      colEntries <- liftIO $ getColumns dbId connection tableName
 
       rows :: [[SQLData]] <- case context.arguments of
         Arguments args -> do
@@ -647,7 +522,7 @@ queryType connection accessMode dbId tables = do
               Query $
                 P.fold
                   [ "SELECT COUNT() FROM"
-                  , quoteKeyword tableName
+                  , quoteKeyword table.name
                   , "\n"
                   , getWhereClause filterElements
                   ]
@@ -682,68 +557,105 @@ queryType connection accessMode dbId tables = do
                   , show numRows
                   , " rows. "
                   , "Consider setting the `limit` argument on your query: `{ "
-                  , T.unpack tableName
+                  , T.unpack table.name
                   , " (limit: 50) { ... } }`"
                   ]
 
           liftIO $
             executeSqlQuery
               connection
-              tableName
-              colEntries
+              table.name
+              table.columns
               filterElements
               orderElements
               paginationMb
 
-      rowsToList dbId tableName colEntries rows
+      colErrorsToUserError $ rowsToGraphQL dbId table.name table.columns rows
+
+    getOutByPKField :: TableEntry -> IO (Maybe (Out.Field IO))
+    getOutByPKField tableEntry = do
+      let fieldMb = Introspection.tableQueryByPKField tableEntry
+      P.for fieldMb $ \field -> do
+        let fieldEither = Introspection.makeField field
+
+        case fieldEither of
+          Left err -> P.throwIO $ userError $ T.unpack err
+          Right result -> pure result
+
+    getDbEntriesByPK :: TableEntry -> Out.Resolve IO
+    getDbEntriesByPK tableEntry = do
+      context <- ask
+
+      let
+        Arguments args = context.arguments
+        filterElements = do
+          (key, value) <- HashMap.toList args
+          pure (key, Object $ HashMap.singleton "eq" value)
+
+      -- This query can return at most one row, so we don't worry checking for
+      -- COUNT() and asserting it's within the set limits.
+      queryResult <-
+        liftIO $
+          executeSqlQuery
+            connection
+            tableEntry.name
+            tableEntry.columns
+            filterElements
+            []
+            Nothing
+
+      case P.head queryResult of
+        Nothing -> pure Null
+        Just row ->
+          colErrorsToUserError $
+            rowToGraphQL
+              dbId
+              tableEntry.name
+              tableEntry.columns
+              row
 
     getResolvers :: IO (HashMap.HashMap Text (Resolver IO))
     getResolvers = do
       let
+        -- Exceptions must be converted to ResolverExceptions
+        -- to be picked up by GQL query executor
+        wrapResolver :: Out.Resolve IO -> Out.Resolve IO
+        wrapResolver resolver =
+          catchAll
+            resolver
+            (throw . ResolverException)
+
         getTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getTableTuple table = do
-          outField <- getOutField table.name
+          outField <- getOutField table
           pure
             ( doubleXEncodeGql table.name
             , ValueResolver
                 outField
-                ( -- Exceptions must be converted to ResolverExceptions
-                  -- to be picked up by GQL query executor
-                  catchAll
-                    (getDbEntries table.name)
-                    (throw . ResolverException)
-                )
+                $ wrapResolver
+                $ getDbEntries table
             )
 
-        getTableTuples :: IO [(Text, Resolver IO)]
-        getTableTuples =
-          P.for tables getTableTuple
+        getTableByPKTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+        getTableByPKTuple table = do
+          fieldMb <- getOutByPKField table
+          P.for fieldMb $ \outField -> do
+            pure
+              ( doubleXEncodeGql $ table.name <> "_by_pk"
+              , ValueResolver
+                  outField
+                  $ wrapResolver
+                  $ getDbEntriesByPK table
+              )
 
-      getTableTuples <&> HashMap.fromList
-
-  -- -- TODO: Add support for retriving record by ID
-  -- getResolversPrimaryKey :: IO (HashMap.HashMap Text (Resolver IO))
-  -- getResolversPrimaryKey = do
-  --   let
-  --     getTableTuple table = do
-  --       outField <- getOutField $ table.name
-  --       pure
-  --         ( table.name) <> "_by_pk"
-  --         , ValueResolver
-  --             outField
-  --             (getDbEntries $ table.name)
-  --         )
-
-  --     getTableTuples :: IO [(Text, Resolver IO)]
-  --     getTableTuples =
-  --       sequence $ tables <&> getTableTuple
-
-  --   getTableTuples <&> HashMap.fromList
+      queryMany <- P.for tables getTableTuple
+      queryByPKMbs <- P.for tables getTableByPKTuple
+      let queryByPK = P.catMaybes queryByPKMbs
+      pure $ HashMap.fromList $ queryMany <> queryByPK
 
   resolvers <- getResolvers
   schemaResolver <- getSchemaResolver accessMode tables
 
-  -- resolversPrimaryKey <- getResolversPrimaryKey
   let
     -- Resolve = ReaderT Context m Value
     wrapResolve resolve = do
@@ -923,8 +835,64 @@ getMutationResponse accessMode tableName columnEntries =
         }
 
 
-rowsToList :: (MonadIO m) => Text -> Text -> [ColumnEntry] -> [[SQLData]] -> m Value
-rowsToList dbId tableName columnEntries updatedRows =
+rowToGraphQL :: Text -> Text -> [ColumnEntry] -> [SQLData] -> Either [(Text, Text)] Value
+rowToGraphQL dbId tableName columnEntries row =
+  let
+    buildMetadataJson :: Text -> Text -> Text
+    buildMetadataJson colName rowid =
+      object ["url" .= colToFileUrl dbId tableName colName rowid]
+        & encodeToText
+
+    parseSqlData :: (ColumnEntry, SQLData) -> Either (Text, Text) (Text, Value)
+    parseSqlData (colEntry, colVal) =
+      if "BLOB" `T.isPrefixOf` colEntry.datatype
+        then
+          pure
+            ( colEntry.column_name_gql
+            , case colVal of
+                SQLNull -> Null
+                SQLInteger id ->
+                  String $
+                    buildMetadataJson colEntry.column_name (show id)
+                SQLText id ->
+                  String $
+                    buildMetadataJson colEntry.column_name id
+                _ -> Null
+            )
+        else case sqlDataToGQLValue colEntry.datatype colVal of
+          Left err ->
+            Left
+              (colEntry.column_name_gql, err)
+          Right gqlData ->
+            Right
+              ( colEntry.column_name_gql
+              , case colEntry.datatype of
+                  -- Coerce value to nullable String
+                  -- if no datatype is set.
+                  -- This happens for columns in views.
+                  "" -> gqlValueToNullableString gqlData
+                  _ -> gqlData
+              )
+  in
+    -- => [(ColumnEntry, SQLData)]
+    P.zip columnEntries row
+      -- => [Either (Text, Text) (Text, Value)]
+      <&> parseSqlData
+      -- => Either [(Text, Text)] (Text, Value)
+      & collectErrorList
+      -- => Either [(Text, Text)] (HashMap Text Value)
+      <&> HashMap.fromList
+      -- => Either [(Text, Text)] Value
+      <&> Object
+
+
+rowsToGraphQL
+  :: Text
+  -> Text
+  -> [ColumnEntry]
+  -> [[SQLData]]
+  -> Either [(Text, Text)] Value
+rowsToGraphQL dbId tableName columnEntries updatedRows =
   let
     buildMetadataJson :: Text -> Text -> Text
     buildMetadataJson colName rowid =
@@ -970,18 +938,26 @@ rowsToList dbId tableName columnEntries updatedRows =
           )
       -- => Either [[(Text, Text)]] [Value]
       & collectErrorList
-      & \case
-        Right values -> pure $ List values
-        Left errors ->
-          let
-            errorLines =
-              P.join errors
-                <&> \(column, err) -> "On column " <> show column <> ": " <> err
-          in
-            P.throwIO $
-              userError $
-                T.unpack $
-                  "Multiple errors occurred:\n" <> P.unlines errorLines
+      -- => Either [(Text, Text)] [Value]
+      & Either.mapLeft P.join
+      -- => Either [(Text, Text)] Value
+      <&> List
+
+
+-- | Formats errors from `row(s)ToGraphQL` and throws them.
+colErrorsToUserError :: forall m a. (MonadIO m) => Either [(Text, Text)] a -> m a
+colErrorsToUserError = \case
+  Right v -> pure v
+  Left errors ->
+    let
+      errorLines =
+        errors
+          <&> \(column, err) -> "On column " <> show column <> ": " <> err
+    in
+      P.throwIO $
+        userError $
+          T.unpack $
+            "Multiple errors occurred:\n" <> P.unlines errorLines
 
 
 executeSqlMutation
@@ -1403,7 +1379,9 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
           pure (P.length sqlDataRows, returnedRows & P.concat)
 
       (numOfChanges, returnedRows) <- insertInDb context.arguments
-      returning <- rowsToList dbId tableName columnEntries returnedRows
+      returning <-
+        colErrorsToUserError $
+          rowsToGraphQL dbId tableName columnEntries returnedRows
 
       pure $
         Object $
@@ -1434,7 +1412,9 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 filterElements
         _ -> pure (0, [])
 
-      returning <- rowsToList dbId tableName columnEntries updatedRows
+      returning <-
+        colErrorsToUserError $
+          rowsToGraphQL dbId tableName columnEntries updatedRows
 
       pure $
         Object $
@@ -1491,7 +1471,9 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
             _ -> pure (0, [])
           Nothing -> pure (0, [])
 
-      returning <- rowsToList dbId tableName columnEntries deletedRows
+      returning <-
+        colErrorsToUserError $
+          rowsToGraphQL dbId tableName columnEntries deletedRows
 
       pure $
         Object $

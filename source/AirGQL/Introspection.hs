@@ -1,6 +1,8 @@
 module AirGQL.Introspection (
   typeNameResolver,
   getSchemaResolver,
+  tableQueryField,
+  tableQueryByPKField,
 )
 where
 
@@ -131,8 +133,8 @@ tableRowType table = do
   Type.object (doubleXEncodeGql table.name <> "_row") fields
 
 
-tableQueryCommonArgs :: TableEntry -> [Type.InputValue]
-tableQueryCommonArgs table =
+tableQueryField :: TableEntry -> Type.Field
+tableQueryField table =
   let
     fieldsWithOrderingTerm =
       table.columns <&> \columnEntry -> do
@@ -149,62 +151,47 @@ tableQueryCommonArgs table =
               <> "\"."
           )
   in
-    [ Type.inputValue "filter" (filterType table)
-        & Type.inputValueWithDescription "Filter to select specific rows"
-    , Type.inputValue "order_by" (Type.list orderType)
-        & Type.inputValueWithDescription "Columns used to sort the data"
-    , Type.inputValue "limit" Type.typeInt
-        & Type.inputValueWithDescription "Limit the number of returned rows"
-    , Type.inputValue "offset" Type.typeInt
-        & Type.inputValueWithDescription "The index to start returning rows from"
-    ]
+    Type.field
+      (doubleXEncodeGql table.name)
+      (Type.nonNull $ Type.list $ Type.nonNull $ tableRowType table)
+      & Type.fieldWithDescription ("Rows from the table \"" <> table.name <> "\"")
+      & Type.withArguments
+        [ Type.inputValue "filter" (filterType table)
+            & Type.inputValueWithDescription "Filter to select specific rows"
+        , Type.inputValue "order_by" (Type.list orderType)
+            & Type.inputValueWithDescription "Columns used to sort the data"
+        , Type.inputValue "limit" Type.typeInt
+            & Type.inputValueWithDescription "Limit the number of returned rows"
+        , Type.inputValue "offset" Type.typeInt
+            & Type.inputValueWithDescription "The index to start returning rows from"
+        ]
 
 
-tableQueryField :: TableEntry -> Type.Field
-tableQueryField table =
-  Type.field
-    (doubleXEncodeGql table.name)
-    (Type.nonNull $ Type.list $ Type.nonNull $ tableRowType table)
-    & Type.fieldWithDescription ("Rows from the table \"" <> table.name <> "\"")
-    & Type.withArguments (tableQueryCommonArgs table)
-
-
-restrictedArgNames :: [Text]
-restrictedArgNames = ["limit", "offset", "order_by", "filter"]
-
-
-mkArgName :: Text -> Text
-mkArgName name = do
-  let encoded = doubleXEncodeGql name
-  if P.elem encoded restrictedArgNames
-    then encoded <> "_"
-    else encoded
-
-
-tableQueryByPk :: TableEntry -> Type.Field
-tableQueryByPk table = do
+tableQueryByPKField :: TableEntry -> Maybe Type.Field
+tableQueryByPKField table = do
   let pks = List.filter (\col -> col.primary_key) table.columns
 
   -- We filter out the rowid column, unless it is the only one
-  let withoutRowid = case pks of
-        [first] | first.isRowid -> [first]
-        _ -> List.filter (\col -> P.not col.isRowid) pks
+  withoutRowid <- case pks of
+    [] -> Nothing
+    [first] | first.isRowid -> Just [first]
+    _ -> Just $ List.filter (\col -> P.not col.isRowid) pks
 
   let pkArguments =
         withoutRowid <&> \column -> do
-          let name = mkArgName column.column_name_gql
+          let name = doubleXEncodeGql column.column_name_gql
           Type.inputValue name $ Type.nonNull $ columnType column
 
-  Type.field
-    (doubleXEncodeGql table.name <> "_by_pk")
-    (tableRowType table)
-    & Type.fieldWithDescription
-      ( "Rows from the table \""
-          <> table.name
-          <> "\", accessible by their primary key"
-      )
-    & Type.withArguments (tableQueryCommonArgs table)
-    & Type.withArguments pkArguments
+  pure $
+    Type.field
+      (doubleXEncodeGql table.name <> "_by_pk")
+      (tableRowType table)
+      & Type.fieldWithDescription
+        ( "Rows from the table \""
+            <> table.name
+            <> "\", accessible by their primary key"
+        )
+      & Type.withArguments pkArguments
 
 
 mutationResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
@@ -363,7 +350,7 @@ getSchema accessMode tables = do
         then
           P.fold
             [ tables <&> tableQueryField
-            , tables <&> tableQueryByPk
+            , tables & P.mapMaybe tableQueryByPKField
             ]
         else []
 
