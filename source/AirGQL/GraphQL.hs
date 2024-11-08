@@ -109,7 +109,8 @@ import AirGQL.Lib (
   AccessMode (ReadAndWrite, ReadOnly, WriteOnly),
   ColumnEntry (column_name, datatype, datatype_gql),
   GqlTypeName (root),
-  TableEntry (columns, name),
+  ObjectType (Table),
+  TableEntry (columns, name, object_type),
   column_name_gql,
   getColumns,
  )
@@ -124,6 +125,7 @@ import AirGQL.Types.SchemaConf (
 import AirGQL.Types.Utils (encodeToText)
 import AirGQL.Utils (colToFileUrl, collectErrorList, quoteKeyword, quoteText)
 import Data.Either.Extra qualified as Either
+import Data.List qualified as List
 
 
 typeNameToScalarType :: Maybe GqlTypeName -> ScalarType
@@ -618,7 +620,7 @@ queryType connection accessMode dbId tables = do
     getResolvers = do
       let
         -- Exceptions must be converted to ResolverExceptions
-        -- to be picked up by GQL query executor
+        -- to be picked up by the GQL query executor
         wrapResolver :: Out.Resolve IO -> Out.Resolve IO
         wrapResolver resolver =
           catchAll
@@ -1615,10 +1617,16 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
         getTableTuples :: IO [(Text, Resolver IO)]
         getTableTuples =
-          sequence $
-            (tables <&> getInsertTableTuple)
-              <> (tables <&> getUpdateTableTuple)
-              <> (tables <&> getDeleteTableTuple)
+          let
+            tablesWithoutViews =
+              List.filter
+                (\table -> table.object_type == Table)
+                tables
+          in
+            sequence $
+              (tablesWithoutViews <&> getInsertTableTuple)
+                <> (tablesWithoutViews <&> getUpdateTableTuple)
+                <> (tablesWithoutViews <&> getDeleteTableTuple)
 
       getTableTuples <&> HashMap.fromList
 

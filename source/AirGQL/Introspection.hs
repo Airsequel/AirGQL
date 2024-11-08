@@ -17,6 +17,7 @@ import Protolude (
   ($),
   (&),
   (<&>),
+  (==),
  )
 import Protolude qualified as P
 
@@ -34,7 +35,8 @@ import AirGQL.Lib (
   AccessMode,
   ColumnEntry (isRowid, primary_key),
   GqlTypeName (full),
-  TableEntry (columns, name),
+  ObjectType (Table),
+  TableEntry (columns, name, object_type),
   canRead,
   canWrite,
   column_name_gql,
@@ -354,13 +356,18 @@ getSchema accessMode tables = do
             ]
         else []
 
+    tablesWithoutViews =
+      List.filter
+        (\table -> table.object_type == Table)
+        tables
+
     mutationType =
       if canWrite accessMode
         then
           P.fold
-            [ tables <&> tableInsertField accessMode
-            , tables <&> tableUpdateField accessMode
-            , tables <&> tableDeleteField accessMode
+            [ tablesWithoutViews <&> tableInsertField accessMode
+            , tablesWithoutViews <&> tableUpdateField accessMode
+            , tablesWithoutViews <&> tableDeleteField accessMode
             ]
         else []
 
