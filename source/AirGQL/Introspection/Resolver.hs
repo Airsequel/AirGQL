@@ -151,7 +151,7 @@ makeField field = do
   pure $ Out.Field field.description ty $ HashMap.fromList args
 
 
--- | Create a resolver by calling which always returns a constant value.
+-- | Create a resolver which always returns a constant value.
 makeConstField :: IType.Field -> Type.Value -> Result (Out.Resolver IO)
 makeConstField field value = do
   gqlField <- makeField field

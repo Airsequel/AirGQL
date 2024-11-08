@@ -17,7 +17,6 @@ import Protolude (
   Monoid (mempty),
   Text,
   fromMaybe,
-  readFile,
   show,
   ($),
   (&),
@@ -32,12 +31,9 @@ import Data.Aeson (Value (Number))
 import Data.Aeson qualified as Ae
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Object)
-import Data.ByteString.Lazy qualified as BL
-import Data.HashMap.Internal.Strict qualified as HashMap
 import Data.List qualified as List
-import Data.Text (pack, unpack)
+import Data.Text (pack)
 import Data.Text qualified as T
-import Data.Text.Encoding as T (encodeUtf8)
 import Database.SQLite.Simple (
   Query,
   SQLData (SQLFloat, SQLInteger, SQLNull, SQLText),
@@ -49,9 +45,8 @@ import Database.SQLite.Simple qualified as SS
 import Database.SQLite.Simple.QQ (sql)
 import Language.GraphQL.JSON (graphql)
 import Language.GraphQL.TH (gql)
-import Language.GraphQL.Type as GQL (Value (Object, String))
 import Servant.Server (runHandler)
-import System.Directory (createDirectoryIfMissing, makeAbsolute)
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Posix (changeWorkingDirectory, getWorkingDirectory)
 import Test.Hspec (
@@ -67,9 +62,7 @@ import Test.Hspec (
 import Test.Hspec qualified as Hspec
 
 import AirGQL.GraphQL (getDerivedSchema)
-import AirGQL.Introspection (createType)
 import AirGQL.Lib (
-  AccessMode (WriteOnly),
   ColumnEntry (
     ColumnEntry,
     column_name,
@@ -95,6 +88,7 @@ import AirGQL.Lib (
     tbl_name
   ),
   getColumns,
+  getEnrichedTables,
   getTables,
   replaceCaseInsensitive,
   stringToGqlTypeName,
@@ -103,7 +97,7 @@ import AirGQL.Lib qualified
 import AirGQL.Raw (raw)
 import AirGQL.Servant.SqlQuery (sqlQueryPostHandler)
 import AirGQL.Types.PragmaConf qualified as PragmaConf
-import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
+import AirGQL.Types.SchemaConf (defaultSchemaConf)
 import AirGQL.Types.SqlQueryPostResult (
   SqlQueryPostResult (
     affectedTables,
@@ -117,31 +111,16 @@ import AirGQL.Utils (
   removeIfExists,
   withRetryConn,
  )
-import Tests.Utils (testRoot, withDataDbConn, withTestDbConn)
-
-
--- | Save test databases after running tests for later inspection
-shouldSaveDbs :: Bool
-shouldSaveDbs = True
-
-
-dbPath :: Text
-dbPath = T.pack (testRoot </> "fixture.db")
-
-
-rmSpaces :: Text -> BL.ByteString
-rmSpaces text =
-  let
-    value :: Maybe Ae.Value =
-      text
-        & T.encodeUtf8
-        & pure
-        & BL.fromChunks
-        & Ae.decode
-  in
-    case value of
-      Just val -> Ae.encode val
-      Nothing -> "ERROR: Failed to decode JSON"
+import Tests.IntrospectionSpec qualified
+import Tests.Utils (
+  dbPath,
+  fixtureDbId,
+  rmSpaces,
+  shouldSaveDbs,
+  testRoot,
+  withDataDbConn,
+  withTestDbConn,
+ )
 
 
 createUsersTableQuery :: Query
@@ -220,8 +199,7 @@ testSuite = do
       results `shouldBe` ["hi world", "hi World", "HeLLo WorLd"]
 
     it "loads all tables from database" $ do
-      tables <- do
-        conn <- open $ unpack dbPath
+      tables <- SS.withConnection dbPath $ \conn ->
         getTables conn
 
       shouldBe
@@ -258,9 +236,8 @@ testSuite = do
 
     describe "getColumns" $ do
       it "loads all columns from users table" $ do
-        tableColumns <- do
-          conn <- open $ unpack dbPath
-          getColumns dbPath conn "users"
+        tableColumns <- SS.withConnection dbPath $ \conn ->
+          getColumns fixtureDbId conn "users"
 
         let
           columnsExpected =
@@ -277,6 +254,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
+                , isRowid = True
                 }
             , ColumnEntry
                 { column_name = "name"
@@ -291,6 +269,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
             , ColumnEntry
                 { column_name = "email"
@@ -305,6 +284,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
+                , isRowid = False
                 }
             , ColumnEntry
                 { column_name = "created_utc"
@@ -319,6 +299,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
             , ColumnEntry
                 { column_name = "number_of_logins"
@@ -333,6 +314,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
             , ColumnEntry
                 { column_name = "progress"
@@ -347,6 +329,7 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
             ]
 
@@ -354,7 +337,7 @@ testSuite = do
 
       it "loads a nullable single-select column" $ do
         let dbName = "creates_nullable_single-select.db"
-        withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        withTestDbConn dbName $ \conn -> do
           execute_
             conn
             [sql|
@@ -385,13 +368,14 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
 
           P.lastMay tableColumns `shouldBe` Just columnExpected
 
       it "loads a non-null single-select column" $ do
         let dbName = "creates_non-null_single-select.db"
-        withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        withTestDbConn dbName $ \conn -> do
           execute_
             conn
             [sql|
@@ -422,13 +406,14 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
 
           P.lastMay tableColumns `shouldBe` Just columnExpected
 
       it "coerces a multi-type single-select column to text" $ do
         let dbName = "multi-type_single-select.db"
-        withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        withTestDbConn dbName $ \conn -> do
           execute_
             conn
             [sql|
@@ -459,13 +444,14 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = False
+                , isRowid = False
                 }
 
           P.lastMay tableColumns `shouldBe` Just columnExpected
 
       it "marks integer primary keys as omittable" $ do
         let dbName = "integer-omittable-primary-key.db"
-        withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        withTestDbConn dbName $ \conn -> do
           execute_
             conn
             [sql|
@@ -491,13 +477,14 @@ testSuite = do
                 , isReference = False
                 , dflt_value = Nothing
                 , primary_key = True
+                , isRowid = False
                 }
 
           P.lastMay tableColumns `shouldBe` Just columnExpected
 
       it "correctly parses generated columns" $ do
         let dbName = "generated-columns.db"
-        withTestDbConn shouldSaveDbs dbName $ \conn -> do
+        withTestDbConn dbName $ \conn -> do
           execute_
             conn
             [sql|
@@ -779,7 +766,7 @@ testSuite = do
 
   describe "Queries" $ do
     it "supports retrieving data" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -787,12 +774,12 @@ testSuite = do
           values ('Adrian', 'adrian@example.com', '2021-01-01T00:00Z')
         |]
 
-      tables <- getTables conn
+      Right tables <- getEnrichedTables conn
       schema <-
         getDerivedSchema
           defaultSchemaConf
           conn
-          dbPath
+          fixtureDbId
           tables
 
       Right result <- graphql schema Nothing mempty "{ users { name } }"
@@ -821,12 +808,12 @@ testSuite = do
             VALUES ('John')
           |]
 
-        tables <- getTables conn
+        Right tables <- getEnrichedTables conn
         schema <-
           getDerivedSchema
             defaultSchemaConf
             conn
-            dbPath
+            fixtureDbId
             tables
 
         Right result <-
@@ -864,7 +851,7 @@ testSuite = do
 
       before_ setupDatabaseSpaces $ it "supports column names with spaces" $ do
         conn <- open dbPathSpaces
-        tables <- getTables conn
+        Right tables <- getEnrichedTables conn
         schema <-
           getDerivedSchema
             defaultSchemaConf
@@ -891,13 +878,8 @@ testSuite = do
         it "generates introspection schema for column names with spaces" $
           do
             conn <- open dbPathSpaces
-            tables <- getTables conn
-            schema <-
-              getDerivedSchema
-                defaultSchemaConf
-                conn
-                (pack dbPathSpaces)
-                tables
+            Right tables <- getEnrichedTables conn
+            schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
             Right result <-
               graphql
                 schema
@@ -930,13 +912,8 @@ testSuite = do
           (0, 'with spaces', 'no spaces', 'no spaces 1', 'no spaces 2')
       |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          (pack dbPathSpaces)
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <-
         graphql
@@ -986,13 +963,8 @@ testSuite = do
           VALUES ('john@example.com', 0), ('eve@example.com', 4);
         |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          (pack dbPathSpaces)
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <-
         graphql
@@ -1020,7 +992,7 @@ testSuite = do
       |]
 
     it "supports aliases" $ do
-      conn <- open $ unpack dbPath
+      conn <- open dbPath
       execute_
         conn
         [sql|
@@ -1045,25 +1017,20 @@ testSuite = do
           }}
         |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          dbPath
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing mempty query
       Ae.encode result `shouldBe` expected
 
     it "supports fragments" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
-        insert into users (name, email, created_utc)
-        values ('Adrian', 'adrian@example.com', '2021-01-01T00:00Z')
-      |]
+          insert into users (name, email, created_utc)
+          values ('Adrian', 'adrian@example.com', '2021-01-01T00:00Z')
+        |]
 
       let
         query =
@@ -1087,19 +1054,14 @@ testSuite = do
             }}
           |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          dbPath
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing mempty query
       Ae.encode result `shouldBe` expected
 
     it "supports directives" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1133,20 +1095,16 @@ testSuite = do
               ]
             }}
           |]
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          dbPath
-          tables
+
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing variables query
 
       Ae.encode result `shouldBe` expected
 
     it "supports retrieving records with a filter" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1156,13 +1114,8 @@ testSuite = do
           ('Eve', 'eve@example.com', '2019-01-01T00:00Z')
         |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          dbPath
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <-
         graphql
@@ -1181,7 +1134,7 @@ testSuite = do
         `shouldBe` "{\"data\":{\"users\":[{\"name\":\"Eve\"}]}}"
 
     it "supports retrieving records with a filter over int and float" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1191,13 +1144,8 @@ testSuite = do
           ('Eve', 'eve@example.com', '2019-01-01T00:00Z', 0.4)
         |]
 
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema
-          defaultSchemaConf
-          conn
-          dbPath
-          tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result1 <-
         graphql
@@ -1249,8 +1197,8 @@ testSuite = do
           ('Anna', NULL)
         |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result1 <-
         graphql
@@ -1281,7 +1229,7 @@ testSuite = do
         `shouldBe` "{\"data\":{\"users\":[{\"name\":\"Anna\"}]}}"
 
     it "supports retrieving records with like and ilike filter" $ do
-      withRetryConn (unpack dbPath) $ \conn -> do
+      withRetryConn dbPath $ \conn -> do
         execute_
           conn
           [sql|
@@ -1292,13 +1240,8 @@ testSuite = do
             ('Eve', 'eve@evil.com', '2019-01-01T00:00Z')
           |]
 
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema
-            defaultSchemaConf
-            conn
-            dbPath
-            tables
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
         Right likeResult <-
           graphql
@@ -1334,7 +1277,7 @@ testSuite = do
                      \[{\"name\":\"John\"},{\"name\":\"Anna\"}]}}"
 
     it "supports retrieving records with several filters" $ do
-      withRetryConn (unpack dbPath) $ \conn -> do
+      withRetryConn dbPath $ \conn -> do
         execute_
           conn
           [sql|
@@ -1345,13 +1288,8 @@ testSuite = do
             ('Eve', 'eve@evil.com', '2019-01-01T00:00Z')
           |]
 
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema
-            defaultSchemaConf
-            conn
-            dbPath
-            tables
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
         Right likeResult <-
           graphql
@@ -1375,7 +1313,7 @@ testSuite = do
           `shouldBe` "{\"data\":{\"users\":[{\"name\":\"John\"}]}}"
 
     it "supports mutating records with several filters" $ do
-      withRetryConn (unpack dbPath) $ \conn -> do
+      withRetryConn dbPath $ \conn -> do
         execute_
           conn
           [sql|
@@ -1386,13 +1324,8 @@ testSuite = do
             ('Eve', 'eve@evil.com', '2019-01-01T00:00Z')
           |]
 
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema
-            defaultSchemaConf
-            conn
-            dbPath
-            tables
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
         Right likeResult <-
           graphql
@@ -1422,7 +1355,7 @@ testSuite = do
                      \\"returning\":[{\"email\":\"john@new.com\"}]}}}"
 
     it "supports retrieving multi-type columns" $ do
-      withTestDbConn shouldSaveDbs "multi-type_columns.db" $ \conn -> do
+      withTestDbConn "multi-type_columns.db" $ \conn -> do
         execute_
           conn
           [sql|
@@ -1433,9 +1366,8 @@ testSuite = do
             SELECT NULL AS col
           |]
 
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema defaultSchemaConf conn dbPath tables
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
         Right result1 <-
           graphql
@@ -1464,7 +1396,7 @@ testSuite = do
         Ae.encode result1 `shouldBe` expected
 
     it "supports querying a single entry" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1474,8 +1406,8 @@ testSuite = do
           ('Eve', 'eve@example.com', '2019-01-01T00:00Z')
         |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <-
         graphql
@@ -1496,7 +1428,7 @@ testSuite = do
         `shouldBe` "{\"data\":{\"users\":[{\"name\":\"Eve\"}]}}"
 
     it "errors out on integer overflows" $ do
-      withTestDbConn shouldSaveDbs "integer-overflows.db" $ \conn -> do
+      withTestDbConn "integer-overflows.db" $ \conn -> do
         execute_
           conn
           [sql|
@@ -1513,8 +1445,9 @@ testSuite = do
             VALUES (8000000000, 9000000000)
           |]
 
-        tables <- getTables conn
-        schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+
         Right result <-
           graphql
             schema
@@ -1583,9 +1516,9 @@ testSuite = do
             }
           |]
 
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      conn <- SS.open dbPath
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -1628,7 +1561,7 @@ testSuite = do
           VALUES (1, 0), (2, 1), (3, FALSE), (4, TRUE)
         |]
 
-      tables <- getTables conn
+      Right tables <- getEnrichedTables conn
       schema <-
         getDerivedSchema
           defaultSchemaConf
@@ -1708,7 +1641,7 @@ testSuite = do
           |]
         execute_ conn "DELETE FROM items"
 
-        tables <- getTables conn
+        Right tables <- getEnrichedTables conn
         schema <-
           getDerivedSchema
             defaultSchemaConf
@@ -1745,7 +1678,7 @@ testSuite = do
         allItems `shouldBe` [[SQLInteger 1]]
 
     it "treats NULL as a value when using 'neq' filters" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1776,14 +1709,14 @@ testSuite = do
               }
             }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
 
     it "treats NULL as a value when using 'nin' filters" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1819,14 +1752,14 @@ testSuite = do
               }
             }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
 
     it "supports 'in' filters" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1862,8 +1795,8 @@ testSuite = do
               }
             }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -1904,15 +1837,15 @@ testSuite = do
               }
             }|]
 
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      conn <- SS.open dbPath
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
 
     it "supports updating data and returning the updated data" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -1954,8 +1887,8 @@ testSuite = do
               }
             }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -2012,9 +1945,9 @@ testSuite = do
               }
             |]
 
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      conn <- SS.open dbPath
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right _ <- graphql schema Nothing mempty firstQuery
       Right result <- graphql schema Nothing mempty secondQuery
 
@@ -2073,9 +2006,9 @@ testSuite = do
         expected =
           "user error (Column progress cannot be set on conflicts without being explicitly provided)"
 
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      conn <- SS.open dbPath
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right _ <- graphql schema Nothing mempty firstQuery
       Just err <-
         catchAll
@@ -2085,7 +2018,7 @@ testSuite = do
       err `shouldBe` expected
 
     it "supports deleting data and returning the deleted data" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -2126,8 +2059,8 @@ testSuite = do
               }
             }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -2151,7 +2084,7 @@ testSuite = do
           VALUES ('red')
         |]
 
-      tables <- getTables conn
+      Right tables <- getEnrichedTables conn
       schema <-
         getDerivedSchema
           defaultSchemaConf
@@ -2215,7 +2148,7 @@ testSuite = do
       Ae.encode queryResult `shouldBe` expectedResult
 
     it "supports simultaneous inserts" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
 
       let
         query =
@@ -2254,8 +2187,8 @@ testSuite = do
             }
           |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing mempty query
       Ae.encode result `shouldBe` expected
@@ -2265,7 +2198,7 @@ testSuite = do
       allUsers `shouldBe` [[SQLText "Best Song", SQLInteger 125]]
 
     it "supports simultaneous updates" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -2308,8 +2241,8 @@ testSuite = do
             }
           |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing mempty query
       Ae.encode result `shouldBe` expected
@@ -2357,9 +2290,9 @@ testSuite = do
             }
           |]
 
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      conn <- SS.open dbPath
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       Right result <- graphql schema Nothing variables query
 
@@ -2383,8 +2316,8 @@ testSuite = do
           VALUES (1, 0), (2, 0.1), (3, -0.1), (4, 123.456)
         |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
       let
         mutation =
@@ -2460,7 +2393,7 @@ testSuite = do
             )
           |]
 
-        tables <- getTables conn
+        Right tables <- getEnrichedTables conn
         schema <-
           getDerivedSchema
             defaultSchemaConf
@@ -2508,7 +2441,7 @@ testSuite = do
                      ]
 
     it "supports updating data" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -2544,8 +2477,8 @@ testSuite = do
             }
           |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -2566,7 +2499,7 @@ testSuite = do
                    ]
 
     it "supports deleting data by text id" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -2597,8 +2530,8 @@ testSuite = do
             }
           |]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -2616,7 +2549,7 @@ testSuite = do
                    ]
 
     it "supports deleting data by integer id" $ do
-      conn <- open $ unpack dbPath
+      conn <- SS.open dbPath
       execute_
         conn
         [sql|
@@ -2645,8 +2578,8 @@ testSuite = do
             }
           }|]
 
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
@@ -2664,7 +2597,7 @@ testSuite = do
                    ]
 
     it "returns error on foreign key constraint violation" $ do
-      withTestDbConn shouldSaveDbs (testRoot </> "foreign_key_constraint.db") $
+      withTestDbConn (testRoot </> "foreign_key_constraint.db") $
         \conn -> do
           execute_
             conn
@@ -2691,9 +2624,9 @@ testSuite = do
               )
             |]
 
-          tables <- getTables conn
+          Right tables <- getEnrichedTables conn
           schema <-
-            getDerivedSchema defaultSchemaConf conn dbPath tables
+            getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
           let invalidQuery =
                 [gql|
@@ -2728,683 +2661,12 @@ testSuite = do
 
           Ae.encode result `shouldBe` expected
 
-  describe "Introspection" $ do
-    it "creates JSON object for GQL types" $ do
-      let
-        tableName = "example_table"
-
-        actual =
-          createType
-            tableName
-            "Description of field"
-            [] -- No arguments
-            ["NON_NULL", "LIST", "NON_NULL", "OBJECT"]
-            tableName
-
-        expected =
-          GQL.Object $
-            HashMap.fromList
-              [ ("name", GQL.String tableName)
-              , ("description", "Description of field")
-              ,
-                ( "type"
-                , GQL.Object $
-                    HashMap.fromList
-                      [ ("kind", "NON_NULL")
-                      ,
-                        ( "ofType"
-                        , GQL.Object $
-                            HashMap.fromList
-                              [ ("kind", "LIST")
-                              ,
-                                ( "ofType"
-                                , GQL.Object $
-                                    HashMap.fromList
-                                      [ ("kind", "NON_NULL")
-                                      ,
-                                        ( "ofType"
-                                        , GQL.Object $
-                                            HashMap.fromList
-                                              [ ("kind", "OBJECT")
-                                              , ("name", GQL.String tableName)
-                                              ]
-                                        )
-                                      ]
-                                )
-                              ]
-                        )
-                      ]
-                )
-              ]
-
-      actual `shouldBe` expected
-
-    describe "Query" $ do
-      it "supports a minimal introspection query" $ do
-        let
-          introspectionQuery :: Text
-          introspectionQuery =
-            [gql|
-              query IntrospectionQuery {
-                __schema {
-                  queryType { name }
-                }
-              }
-            |]
-          expected =
-            rmSpaces
-              [raw|
-                {
-                  "data": {
-                    "__schema": {
-                      "queryType": {
-                        "name": "Query"
-                      }
-                    }
-                  }
-                }
-              |]
-
-        conn <- open $ unpack dbPath
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema defaultSchemaConf conn dbPath tables
-
-        Right result <- graphql schema Nothing mempty introspectionQuery
-
-        Ae.encode result `shouldBe` expected
-
-      it "supports an optional filter argument" $ do
-        let
-          introspectionQuery :: Text
-          introspectionQuery =
-            [gql|
-            query IntrospectionQuery {
-              __schema {
-                queryType {
-                  name
-                  fields {
-                    name
-                    args {
-                      name
-                      type {
-                        name
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          |]
-          expected =
-            rmSpaces
-              [raw|{
-            "data": {
-              "__schema": {
-                "queryType": {
-                  "name": "Query",
-                  "fields": [
-                    {
-                      "name": "users",
-                      "args": [
-                        { "name": "filter",
-                          "type": { "name": "users_filter" }
-                        },
-                        { "name": "order_by",
-                          "type": { "name": null }
-                        },
-                        { "name": "limit",
-                          "type": { "name": "Int" }
-                        },
-                        { "name": "offset",
-                          "type": { "name": "Int" }
-                        }
-                      ]
-                    },
-                    {
-                      "name": "songs",
-                      "args": [
-                        { "name": "filter",
-                          "type": { "name": "songs_filter" }
-                        },
-                        { "name": "order_by",
-                          "type": { "name": null }
-                        },
-                        { "name": "limit",
-                          "type": { "name": "Int" }
-                        },
-                        { "name": "offset",
-                          "type": { "name": "Int" }
-                        }
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          }|]
-
-        conn <- open $ unpack dbPath
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema defaultSchemaConf conn dbPath tables
-
-        Right result <- graphql schema Nothing mempty introspectionQuery
-
-        Ae.encode result `shouldBe` expected
-
-      it "doesn't allow writeonly tokens to read data" $ do
-        let
-          introspectionQuery :: Text
-          introspectionQuery =
-            [gql|
-              query IntrospectionQuery {
-                __schema {
-                  queryType { name }
-                }
-              }
-            |]
-
-          expected =
-            rmSpaces
-              [raw|
-                {
-                  "data": null,
-                  "errors": [{
-                    "locations": [{ "column":3, "line":2 }],
-                    "message": "user error (Cannot read field using writeonly access code)",
-                    "path": ["__schema"]
-                  }]
-                }
-              |]
-
-        schema <- withRetryConn (unpack dbPath) $ \conn -> do
-          tables <- getTables conn
-          getDerivedSchema
-            defaultSchemaConf{accessMode = WriteOnly}
-            conn
-            dbPath
-            tables
-
-        Right response <-
-          graphql schema Nothing mempty introspectionQuery
-
-        Ae.encode response `shouldBe` expected
-
-    describe "Mutation" $ do
-      it "supports introspection queries" $ do
-        let
-          introspectionQuery :: Text
-          introspectionQuery =
-            [gql|
-              query IntrospectionQuery {
-                __schema {
-                  mutationType {
-                    name
-                    fields {
-                      name
-                      args {
-                        name
-                      }
-                    }
-                  }
-                }
-              }
-            |]
-          expected =
-            rmSpaces
-              [raw|
-            {
-              "data": {
-                "__schema": {
-                  "mutationType": {
-                    "name": "Mutation",
-                    "fields": [
-                      {
-                        "name": "insert_users",
-                        "args": [ { "name": "objects" }, { "name": "on_conflict" } ]
-                      },
-                      {
-                        "name": "update_users",
-                        "args": [
-                          { "name": "filter" },
-                          { "name": "set" }
-                        ]
-                      },
-                      {
-                        "name": "delete_users",
-                        "args": [ { "name": "filter" } ]
-                      },
-                      {
-                        "name": "insert_songs",
-                        "args": [ { "name": "objects" }, { "name": "on_conflict" } ]
-                      },
-                      {
-                        "name": "update_songs",
-                        "args": [
-                          { "name": "filter" },
-                          { "name": "set" }
-                        ]
-                      },
-                      {
-                        "name": "delete_songs",
-                        "args": [ { "name": "filter" } ]
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          |]
-
-        conn <- open $ unpack dbPath
-        tables <- getTables conn
-        schema <-
-          getDerivedSchema defaultSchemaConf conn dbPath tables
-
-        Right result <- graphql schema Nothing mempty introspectionQuery
-
-        Ae.encode result `shouldBe` expected
-
-    it "supports __typename on root query" $ do
-      let
-        introspectionQuery =
-          [gql|
-          query TypeName {
-            __typename
-          }
-        |]
-        expected =
-          rmSpaces
-            [raw|
-            {
-              "data": {
-                "__typename" : "Query"
-              }
-            }
-          |]
-
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` expected
-
-    it "returns fields for {query,mutation,subscription}Type" $ do
-      let
-        introspectionQuery =
-          [gql|
-            query {
-              __schema {
-                queryType { fields { name } }
-                mutationType { fields { name } }
-                subscriptionType { fields { name } }
-              }
-            }
-          |]
-        expected =
-          rmSpaces
-            [raw|
-            {
-              "data": {
-                "__schema": {
-                  "queryType": {
-                    "fields": [
-                      { "name": "users" },
-                      { "name": "songs" }
-                    ]
-                  },
-                  "subscriptionType": null,
-                  "mutationType": {
-                    "fields": [
-                      { "name": "insert_users" },
-                      { "name": "update_users" },
-                      { "name": "delete_users" },
-                      { "name": "insert_songs" },
-                      { "name": "update_songs" },
-                      { "name": "delete_songs" }
-                    ]
-                  }
-                }
-              }
-            }
-          |]
-
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <-
-        getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` expected
-
-    it "supports __typename fields" $ do
-      let
-        introspectionQuery =
-          [gql|
-          query UsersTypeName {
-            users {
-              __typename
-            }
-          }
-        |]
-        expected =
-          rmSpaces
-            [raw|
-            {
-              "data": {
-                "users": [
-                  { "__typename" : "users_row" }
-                ]
-              }
-            }
-          |]
-
-      conn <- open $ unpack dbPath
-      execute_
-        conn
-        [sql|
-        insert into users (name, email, created_utc)
-        values ('John', 'john@example.com', '2022-01-01T00:00Z')
-      |]
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` expected
-
-    it "returns types" $ do
-      let
-        introspectionQuery =
-          [gql|
-          query {
-            __schema {
-              types {
-                kind
-                name
-              }
-            }
-          }
-        |]
-        expected =
-          rmSpaces
-            [raw|
-            {
-              "data": {
-                "__schema": {
-                  "types": [
-                    { "kind": "OBJECT", "name": "users_row" },
-                    { "kind": "OBJECT", "name": "users_mutation_response" },
-                    { "kind": "INPUT_OBJECT", "name": "users_insert_input" },
-                    { "kind": "ENUM", "name": "users_column" },
-                    { "kind": "INPUT_OBJECT", "name": "users_upsert_on_conflict" },
-                    { "kind": "INPUT_OBJECT", "name": "users_set_input" },
-                    { "kind": "INPUT_OBJECT", "name": "users_filter" },
-                    { "kind": "INPUT_OBJECT", "name": "users_order_by" },
-
-                    { "kind": "OBJECT", "name": "songs_row" },
-                    { "kind": "OBJECT", "name": "songs_mutation_response" },
-                    { "kind": "INPUT_OBJECT", "name": "songs_insert_input" },
-                    { "kind": "ENUM", "name": "songs_column" },
-                    { "kind": "INPUT_OBJECT", "name": "songs_upsert_on_conflict" },
-                    { "kind": "INPUT_OBJECT", "name": "songs_set_input" },
-                    { "kind": "INPUT_OBJECT", "name": "songs_filter" },
-                    { "kind": "INPUT_OBJECT", "name": "songs_order_by" },
-
-                    { "kind": "INPUT_OBJECT", "name": "IntComparison" },
-                    { "kind": "INPUT_OBJECT", "name": "FloatComparison" },
-                    { "kind": "INPUT_OBJECT", "name": "StringComparison" },
-                    { "kind": "INPUT_OBJECT", "name": "BooleanComparison" },
-
-                    { "kind": "ENUM", "name": "OrderingTerm" },
-
-                    { "kind": "OBJECT", "name": "Query" },
-                    { "kind": "OBJECT", "name": "Mutation" },
-                    { "kind": "SCALAR", "name": "Boolean" },
-                    { "kind": "SCALAR", "name": "Int" },
-                    { "kind": "SCALAR", "name": "Float" },
-                    { "kind": "SCALAR", "name": "String" },
-                    { "kind": "SCALAR", "name": "ID" },
-                    { "kind": "SCALAR", "name": "Upload" },
-                    { "kind": "OBJECT", "name": "__Schema" },
-                    { "kind": "OBJECT", "name": "__Type" },
-                    { "kind": "ENUM",   "name": "__TypeKind" },
-                    { "kind": "OBJECT", "name": "__Field" },
-                    { "kind": "OBJECT", "name": "__InputValue" },
-                    { "kind": "OBJECT", "name": "__EnumValue" },
-                    { "kind": "OBJECT", "name": "__Directive" },
-                    { "kind": "ENUM",   "name": "__DirectiveLocation" }
-                  ]
-                }
-              }
-            }
-          |]
-
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` expected
-
-    it "returns directives on __schema" $ do
-      let
-        introspectionQuery :: Text =
-          [gql|
-            query UsersTypeName {
-              __schema {
-                directives {
-                  name
-                  description
-                  locations
-                  args {
-                    name
-                    description
-                    defaultValue
-                    type { ...TypeRef }
-                  }
-                }
-              }
-            }
-
-            fragment TypeRef on __Type {
-              kind
-              name
-              ofType {
-                kind
-                name
-                ofType {
-                  kind
-                  name
-                  ofType {
-                    kind
-                    name
-                    ofType {
-                      kind
-                      name
-                      ofType {
-                        kind
-                        name
-                        ofType {
-                          kind
-                          name
-                          ofType {
-                            kind
-                            name
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          |]
-        expected =
-          rmSpaces
-            [raw|
-            {
-              "data": {
-                "__schema": {
-                  "directives": [
-                    {
-                      "name": "skip",
-                      "args": [
-                        {
-                          "name": "if",
-                          "defaultValue": null,
-                          "type": {
-                            "kind": "NON_NULL",
-                            "name": null,
-                            "ofType": {
-                              "kind":"SCALAR",
-                              "name":"Boolean",
-                              "ofType":null
-                            }
-                          },
-                          "description": "Skipped when true."
-                        }
-                      ],
-                      "locations": [
-                        "INLINE_FRAGMENT",
-                        "FRAGMENT_SPREAD",
-                        "FIELD"
-                      ],
-                      "description": "Directs the executor to skip this field or fragment when the `if` argument is true."
-                    },
-                    {
-                      "name": "include",
-                      "args": [
-                        {
-                          "name": "if",
-                          "defaultValue": null,
-                          "type": {
-                            "kind": "NON_NULL",
-                            "name": null,
-                            "ofType": {
-                              "kind":"SCALAR",
-                              "name":"Boolean",
-                              "ofType":null
-                            }
-                          },
-                          "description": "Included when true."
-                        }
-                      ],
-                      "locations": [
-                        "INLINE_FRAGMENT",
-                        "FRAGMENT_SPREAD",
-                        "FIELD"
-                      ],
-                      "description":
-                        "Directs the executor to include this field or fragment only when the `if` argument is true."
-                    },
-                    {
-                      "name": "deprecated",
-                      "args": [
-                        {
-                          "name": "reason",
-                          "defaultValue": "\"No longer supported\"",
-                          "type": {
-                            "kind": "SCALAR",
-                            "name": "String",
-                            "ofType": null
-                          },
-                          "description":
-                            "Explains why this element was deprecated, usually also including a suggestion for how to access supported similar data. Formatted using the Markdown syntax (as specified by [CommonMark](https://commonmark.org/)."
-                        }
-                      ],
-                      "locations": [
-                        "ENUM_VALUE",
-                        "FIELD_DEFINITION"
-                      ],
-                      "description":
-                        "Marks an element of a GraphQL schema as no longer supported."
-                    }
-                  ]
-                }
-              }
-            }
-          |]
-
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` expected
-
-    it "supports a full introspection query" $ do
-      gqlFile <- makeAbsolute $ testRoot </> "introspection_query.gql"
-      introspectionQuery <- readFile gqlFile
-
-      jsonFile <- makeAbsolute $ testRoot </> "introspection_result.json"
-      expected <- readFile jsonFile
-
-      conn <- open $ unpack dbPath
-      tables <- getTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn dbPath tables
-
-      Right result <- graphql schema Nothing mempty introspectionQuery
-
-      Ae.encode result `shouldBe` rmSpaces expected
-
-    it "doesn't allow writeonly tokens to return data" $ do
-      let dbName = "no-writeonly-return.db"
-      withTestDbConn shouldSaveDbs dbName $ \conn -> do
-        execute_
-          conn
-          [sql|
-            CREATE TABLE items (
-              id INTEGER PRIMARY KEY
-            )
-          |]
-
-      let
-        query :: Text
-        query =
-          [gql|
-              mutation items {
-                update_items(filter: { id: { eq: 0 }}, set: { id: 0 }) {
-                  returning { id }
-                }
-              }
-            |]
-
-        expected =
-          rmSpaces
-            [raw|
-              {
-                "data": null,
-                "errors": [{
-                  "locations": [{ "column":3, "line":2 }],
-                  "message": "Cannot query field \"update_items\" on type \"Mutation\"."
-                }]
-              }
-            |]
-
-      schema <- withRetryConn (unpack dbPath) $ \conn -> do
-        tables <- getTables conn
-        getDerivedSchema
-          defaultSchemaConf{accessMode = WriteOnly}
-          conn
-          dbPath
-          tables
-
-      Right response <-
-        graphql schema Nothing mempty query
-
-      Ae.encode response `shouldBe` expected
+  describe "Introspection" Tests.IntrospectionSpec.main
 
 
-deleteDbEntries :: Text -> IO ()
+deleteDbEntries :: FilePath -> IO ()
 deleteDbEntries databasePath = do
-  conn <- open $ unpack databasePath
+  conn <- open databasePath
   execute_ conn "delete from users"
   execute_ conn "delete from songs"
 
@@ -3415,9 +2677,9 @@ main = do
   createDirectoryIfMissing True (".." </> "data" </> "TEST" </> "data")
   changeWorkingDirectory (cwd </> ".." </> "data" </> "TEST")
 
-  removeIfExists $ unpack dbPath
+  removeIfExists dbPath
 
-  withRetryConn (unpack dbPath) $ \conn -> do
+  withRetryConn dbPath $ \conn -> do
     createUsersTable conn
     createSongsTable conn
 
