@@ -306,7 +306,7 @@ tableUpdateField accessMode table = do
       table.columns <&> \columnEntry -> do
         let colName = columnEntry.column_name_gql
         let base = columnType columnEntry
-        Type.inputValue colName $ Type.nonNull base
+        Type.inputValue colName base
 
     updateRow =
       Type.inputObject
