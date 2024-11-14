@@ -34,7 +34,7 @@ import AirGQL.Introspection.Types qualified as Type
 import AirGQL.Lib (
   AccessMode,
   ColumnEntry (isRowid, primary_key),
-  GqlTypeName (full),
+  GqlTypeName (full, root),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
   canRead,
@@ -72,9 +72,11 @@ columnType :: ColumnEntry -> IntrospectionType
 columnType entry = case entry.datatype_gql of
   Nothing -> Type.typeString
   Just type_ ->
-    Type.scalar type_.full
+    Type.scalar type_.root
+      -- NOTE: I wonder if the fact we're generating different descriptions
+      -- based off the field is ok.
       & Type.withDescription
-        ("Data type for column" <> entry.column_name_gql)
+        ("Data type for column '" <> entry.column_name_gql <> "'")
 
 
 orderingTermType :: Type.IntrospectionType
@@ -90,6 +92,7 @@ orderingTermType =
         & Type.enumValueWithDescription "In descending order"
         & Type.deprecatedEnumValue "GraphQL spec recommends all caps for enums"
     ]
+    & Type.withDescription "Ordering options when ordering by a column"
 
 
 filterType :: TableEntry -> IntrospectionType
@@ -101,19 +104,20 @@ filterType table = do
         let typeName = columnTypeName columnEntry
         let type_ = columnType columnEntry
         Type.inputValue colName $
-          Type.inputObject
-            (typeName <> "Comparison")
-            [ Type.inputValue "eq" type_
-            , Type.inputValue "neq" type_
-            , Type.inputValue "gt" type_
-            , Type.inputValue "gte" type_
-            , Type.inputValue "lt" type_
-            , Type.inputValue "lte" type_
-            , Type.inputValue "like" type_
-            , Type.inputValue "ilike" type_
-            , Type.inputValue "in" $ Type.list type_
-            , Type.inputValue "nin" $ Type.list type_
-            ]
+          Type.withDescription ("Compare to a(n) " <> typeName) $
+            Type.inputObject
+              (typeName <> "Comparison")
+              [ Type.inputValue "eq" type_
+              , Type.inputValue "neq" type_
+              , Type.inputValue "gt" type_
+              , Type.inputValue "gte" type_
+              , Type.inputValue "lt" type_
+              , Type.inputValue "lte" type_
+              , Type.inputValue "like" type_
+              , Type.inputValue "ilike" type_
+              , Type.inputValue "in" $ Type.list type_
+              , Type.inputValue "nin" $ Type.list type_
+              ]
 
   Type.inputObject
     (doubleXEncodeGql table.name <> "_filter")
@@ -133,6 +137,8 @@ tableRowType table = do
                   else base
           Type.field colName type_
   Type.object (doubleXEncodeGql table.name <> "_row") fields
+    & Type.withDescription
+      ("Available columns for table \"" <> table.name <> "\"")
 
 
 tableQueryField :: TableEntry -> Type.Field
@@ -230,8 +236,8 @@ tableInsertField accessMode table = do
         let base = columnType columnEntry
         let type_ =
               if columnEntry.isOmittable
-                then Type.nonNull base
-                else base
+                then base
+                else Type.nonNull base
         Type.inputValue colName type_
 
     insertRows =
@@ -275,7 +281,7 @@ tableInsertField accessMode table = do
 
   Type.field
     ("insert_" <> tableName)
-    (mutationResponseType accessMode table)
+    (Type.nonNull $ mutationResponseType accessMode table)
     & Type.fieldWithDescription
       ("Insert new rows in table \"" <> table.name <> "\"")
     & Type.withArguments
@@ -311,7 +317,7 @@ tableUpdateField accessMode table = do
 
   Type.field
     ("update_" <> tableName)
-    (mutationResponseType accessMode table)
+    (Type.nonNull $ mutationResponseType accessMode table)
     & Type.fieldWithDescription
       ("Update rows in table \"" <> table.name <> "\"")
     & Type.withArguments
@@ -330,7 +336,7 @@ tableDeleteField :: AccessMode -> TableEntry -> Type.Field
 tableDeleteField accessMode table = do
   Type.field
     ("delete_" <> doubleXEncodeGql table.name)
-    (mutationResponseType accessMode table)
+    (Type.nonNull $ mutationResponseType accessMode table)
     & Type.fieldWithDescription
       ("Delete rows in table \"" <> table.name <> "\"")
     & Type.withArguments
@@ -384,7 +390,7 @@ getSchema accessMode tables = do
 -- taking 2-3s
 makeSchemaResolver :: Either Text (Type.Schema -> Resolver IO)
 makeSchemaResolver = do
-  let schemaField = Type.field "__schema" Type.typeSchema
+  let schemaField = Type.field "__schema" $ Type.nonNull Type.typeSchema
   ty <- makeType schemaField.type_
   let gqlField = Out.Field schemaField.description ty mempty
   pure $ \schema -> Out.ValueResolver gqlField $ pure $ toGraphQL schema

@@ -577,10 +577,8 @@ queryType connection accessMode dbId tables = do
     getOutByPKField :: TableEntry -> IO (Maybe (Out.Field IO))
     getOutByPKField tableEntry = do
       let fieldMb = Introspection.tableQueryByPKField tableEntry
-      P.for fieldMb $ \field -> do
-        let fieldEither = Introspection.makeField field
-
-        case fieldEither of
+      P.for fieldMb $ \field ->
+        case Introspection.makeField field of
           Left err -> P.throwIO $ userError $ T.unpack err
           Right result -> pure result
 
@@ -895,55 +893,15 @@ rowsToGraphQL
   -> [[SQLData]]
   -> Either [(Text, Text)] Value
 rowsToGraphQL dbId tableName columnEntries updatedRows =
-  let
-    buildMetadataJson :: Text -> Text -> Text
-    buildMetadataJson colName rowid =
-      object ["url" .= colToFileUrl dbId tableName colName rowid]
-        & encodeToText
-
-    parseSqlData :: (ColumnEntry, SQLData) -> Either (Text, Text) (Text, Value)
-    parseSqlData (colEntry, colVal) =
-      if "BLOB" `T.isPrefixOf` colEntry.datatype
-        then
-          pure
-            ( colEntry.column_name_gql
-            , case colVal of
-                SQLNull -> Null
-                SQLInteger id ->
-                  String $
-                    buildMetadataJson colEntry.column_name (show id)
-                SQLText id ->
-                  String $
-                    buildMetadataJson colEntry.column_name id
-                _ -> Null
-            )
-        else case sqlDataToGQLValue colEntry.datatype colVal of
-          Left err ->
-            Left
-              (colEntry.column_name_gql, err)
-          Right gqlData ->
-            Right
-              (colEntry.column_name_gql, gqlData)
-  in
-    updatedRows
-      <&> ( \row ->
-              -- => [(ColumnEntry, SQLData)]
-              P.zip columnEntries row
-                -- => [Either (Text, Text) (Text, Value)]
-                <&> parseSqlData
-                -- => Either [(Text, Text)] (Text, Value)
-                & collectErrorList
-                -- => Either [(Text, Text)] (HashMap Text Value)
-                <&> HashMap.fromList
-                -- => Either [(Text, Text)] Value
-                <&> Object
-          )
-      -- => Either [[(Text, Text)]] [Value]
-      & collectErrorList
-      -- => Either [(Text, Text)] [Value]
-      & Either.mapLeft P.join
-      -- => Either [(Text, Text)] Value
-      <&> List
+  updatedRows
+    -- => [Either [(Text, Text)] Value]
+    <&> rowToGraphQL dbId tableName columnEntries
+    -- => Either [[(Text, Text)]] [Value]
+    & collectErrorList
+    -- => Either [(Text, Text)] [Value]
+    & Either.mapLeft P.join
+    -- => Either [(Text, Text)] Value
+    <&> List
 
 
 -- | Formats errors from `row(s)ToGraphQL` and throws them.

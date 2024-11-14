@@ -10,6 +10,8 @@ module Tests.Utils (
   dbPath,
   fixtureDbId,
   shouldSaveDbs,
+  unorderedShouldBe,
+  sortAllLists,
 ) where
 
 import Protolude (
@@ -19,19 +21,25 @@ import Protolude (
   Maybe (Just, Nothing),
   Text,
   encodeUtf8,
+  fromMaybe,
   pure,
   ($),
   (&),
+  (<&>),
   (<>),
  )
+import Protolude qualified as P
 
 import Data.Aeson qualified as Ae
 import Data.ByteString.Lazy qualified as BL
+import Data.Vector qualified as V
 import Database.SQLite.Simple qualified as SS
 import System.Directory (createDirectoryIfMissing, removePathForcibly)
 import System.FilePath ((</>))
 
 import AirGQL.Utils (removeIfExists, withRetryConn)
+import Data.Aeson (ToJSON)
+import Test.Hspec (shouldBe)
 
 
 testRoot :: FilePath
@@ -91,3 +99,36 @@ rmSpaces text =
     case value of
       Just val -> Ae.encode val
       Nothing -> "ERROR: Failed to decode JSON"
+
+
+{-| Checks whether a value would get encoded to a json string. Does not care
+about the order of fields or elements in lists.
+-}
+unorderedShouldBe :: (ToJSON a) => a -> Text -> IO ()
+unorderedShouldBe actual expected = do
+  let
+    expectedDecoded =
+      expected
+        & encodeUtf8
+        & pure
+        & BL.fromChunks
+        & Ae.decode
+        & fromMaybe "ERROR: Failed to decode JSON"
+
+  sortAllLists (Ae.toJSON actual)
+    `shouldBe` sortAllLists expectedDecoded
+
+
+sortAllLists :: Ae.Value -> Ae.Value
+sortAllLists (Ae.Array arr) =
+  arr
+    <&> sortAllLists
+    & V.toList
+    & P.sort
+    & V.fromList
+    & Ae.Array
+sortAllLists (Ae.Object obj) =
+  obj
+    <&> sortAllLists
+    & Ae.Object
+sortAllLists other = other

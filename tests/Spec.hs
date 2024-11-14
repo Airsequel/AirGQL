@@ -1040,7 +1040,7 @@ testSuite = do
               userB: users { ...basicFields }
             }
 
-            fragment basicFields on users {
+            fragment basicFields on users_row {
               name
               email
             }
@@ -1048,11 +1048,11 @@ testSuite = do
         expected =
           rmSpaces
             [raw|
-            { "data": {
-              "userB":[{"email":"adrian@example.com","name":"Adrian"}],
-              "userA":[{"email":"adrian@example.com","name":"Adrian"}]
-            }}
-          |]
+              { "data": {
+                "userB":[{"email":"adrian@example.com","name":"Adrian"}],
+                "userA":[{"email":"adrian@example.com","name":"Adrian"}]
+              }}
+            |]
 
       Right tables <- getEnrichedTables conn
       schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
@@ -1466,9 +1466,7 @@ testSuite = do
               rmSpaces
                 [raw|
                   {
-                    "data": {
-                      "test": null
-                    },
+                    "data": null,
                     "errors": [{
                       "locations": [{
                         "column": 3,

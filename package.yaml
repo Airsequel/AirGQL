@@ -141,3 +141,4 @@ tests:
       - servant-server >= 0.20 && < 0.21
       - unix >= 2.8.4 && < 2.9
       - unordered-containers >= 0.2.20 && < 0.3
+      - vector >=0.13.0.0 && < 0.14

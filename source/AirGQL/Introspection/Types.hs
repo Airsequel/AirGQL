@@ -13,6 +13,7 @@ module AirGQL.Introspection.Types (
   inputValue,
   inputValueWithDescription,
   withDescription,
+  withDefaultValue,
   fieldWithDescription,
   scalar,
   object,
@@ -264,8 +265,13 @@ instance ToGraphQL InputValue where
         [ ("name", toGraphQL value.name)
         , ("description", toGraphQL value.description)
         , ("type", toGraphQL value.type_)
-        , -- TODO: I don't think show is the correct function here
-          ("defaultValue", Value.String $ show value.defaultValue)
+        , -- TODO: I'm not sure `show` is the correct function here
+
+          ( "defaultValue"
+          , case value.defaultValue of
+              Nothing -> Value.Null
+              Just s -> Value.String $ show s
+          )
         ]
 
 
@@ -283,6 +289,14 @@ inputValueWithDescription :: Text -> InputValue -> InputValue
 inputValueWithDescription newDesc (InputValue{..}) =
   InputValue
     { description = Just newDesc
+    , ..
+    }
+
+
+withDefaultValue :: Value.Value -> InputValue -> InputValue
+withDefaultValue newValue (InputValue{..}) =
+  InputValue
+    { defaultValue = Just newValue
     , ..
     }
 
@@ -505,15 +519,21 @@ typeIntrospectionType :: IntrospectionType
 typeIntrospectionType =
   object
     "__Type"
-    [ field "kind" typeTypeKind
+    [ field "kind" $ nonNull typeTypeKind
     , field "name" typeString
     , field "description" typeString
     , field "interfaces" $ list $ nonNull typeIntrospectionType
     , field "possibleTypes" $ list $ nonNull typeIntrospectionType
     , field "fields" (list $ nonNull typeField)
-        & withArguments [inputValue "includeDeprecated" typeBool]
+        & withArguments
+          [ inputValue "includeDeprecated" typeBool
+              & withDefaultValue (toGraphQL False)
+          ]
     , field "enumValues" (list $ nonNull typeEnumValue)
-        & withArguments [inputValue "includeDeprecated" typeBool]
+        & withArguments
+          [ inputValue "includeDeprecated" typeBool
+              & withDefaultValue (toGraphQL False)
+          ]
     , field "inputFields" $ list $ nonNull typeInputValue
     , field "ofType" typeIntrospectionType
     ]
@@ -565,7 +585,7 @@ typeDirective :: IntrospectionType
 typeDirective =
   object
     "__Directive"
-    [ field "name" typeString
+    [ field "name" $ nonNull typeString
     , field "description" typeString
     , field "args" $ nonNull $ list $ nonNull typeInputValue
     , field "isRepeatable" $ nonNull typeBool
