@@ -569,28 +569,6 @@ main = void $ do
                       ],
                       "description":
                         "Directs the executor to include this field or fragment only when the `if` argument is true."
-                    },
-                    {
-                      "name": "deprecated",
-                      "args": [
-                        {
-                          "name": "reason",
-                          "defaultValue": "\"No longer supported\"",
-                          "type": {
-                            "kind": "SCALAR",
-                            "name": "String",
-                            "ofType": null
-                          },
-                          "description":
-                            "Explains why this element was deprecated, usually also including a suggestion for how to access supported similar data. Formatted using the Markdown syntax (as specified by [CommonMark](https://commonmark.org/)."
-                        }
-                      ],
-                      "locations": [
-                        "ENUM_VALUE",
-                        "FIELD_DEFINITION"
-                      ],
-                      "description":
-                        "Marks an element of a GraphQL schema as no longer supported."
                     }
                   ]
                 }

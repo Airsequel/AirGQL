@@ -348,7 +348,26 @@ tableDeleteField accessMode table = do
 
 
 directives :: [Type.Directive]
-directives = []
+directives =
+  [ Type.directive
+      "skip"
+      ["INLINE_FRAGMENT", "FRAGMENT_SPREAD", "FIELD"]
+      [ Type.inputValue "if" (Type.nonNull Type.typeBool)
+          & Type.inputValueWithDescription "Skipped when true."
+      ]
+      & Type.directiveWithDescription
+        "Directs the executor to skip this field or fragment \
+        \when the `if` argument is true."
+  , Type.directive
+      "include"
+      ["INLINE_FRAGMENT", "FRAGMENT_SPREAD", "FIELD"]
+      [ Type.inputValue "if" (Type.nonNull Type.typeBool)
+          & Type.inputValueWithDescription "Included when true."
+      ]
+      & Type.directiveWithDescription
+        "Directs the executor to include this field or fragment \
+        \only when the `if` argument is true."
+  ]
 
 
 getSchema

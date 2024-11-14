@@ -82,8 +82,8 @@ instance ToGraphQL Schema where
         , ("types", toGraphQL schema.types)
         , ("queryType", toGraphQL schema.queryType)
         , ("mutationType", toGraphQL schema.mutationType)
+        , ("directives", toGraphQL schema.directives)
         , ("subscriptionType", Value.Null)
-        , ("directives", Value.List [])
         ]
 
 

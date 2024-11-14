@@ -1,6 +1,7 @@
+# This is the introspection query performed by the
+# latest graphiql version.
 query IntrospectionQuery {
   __schema {
-
     queryType { name }
     mutationType { name }
     subscriptionType { name }
@@ -23,6 +24,7 @@ fragment FullType on __Type {
   kind
   name
   description
+
 
   fields(includeDeprecated: true) {
     name
@@ -86,6 +88,14 @@ fragment TypeRef on __Type {
               ofType {
                 kind
                 name
+                ofType {
+                  kind
+                  name
+                  ofType {
+                    kind
+                    name
+                  }
+                }
               }
             }
           }
@@ -94,3 +104,4 @@ fragment TypeRef on __Type {
     }
   }
 }
+
