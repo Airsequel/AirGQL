@@ -672,10 +672,10 @@ resolveReferencesConstraint tables referencedTable = do
       tables
   let columns = table.columns
   let pks = P.filter (\column -> column.primary_key) columns
-  let nonRowidPks = P.filter (\column -> column.isRowid) pks
-  case nonRowidPks of
-    [] -> pure "rowid"
-    [column] -> pure column.column_name
+  let nonRowidPks = P.filter (\column -> P.not column.isRowid) pks
+  column <- case nonRowidPks of
+    [] -> P.find (\column -> column.isRowid) pks
+    [column] -> pure column
     -- Note: we currently do not support having composite primary keys
     -- referenced implicitly, as that would lead to multiple complications like:
     -- - figuring out the correct order for the references
@@ -685,6 +685,7 @@ resolveReferencesConstraint tables referencedTable = do
     -- do it as long as we keep track of the column order. Not sure it's worth the
     -- hassle though...
     _ -> Nothing
+  pure column.column_name
 
 
 --  See the docs for `resolveReferencesConstraint` for details

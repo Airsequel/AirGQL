@@ -7,7 +7,6 @@ module AirGQL.GraphQL (
   getDerivedSchema,
   queryType,
   sqlDataToGQLValue,
-  getMutationResponse,
   gqlValueToSQLData,
 )
 where
@@ -28,9 +27,7 @@ import Protolude (
   ReaderT,
   Semigroup ((<>)),
   Text,
-  Traversable (sequence),
   fromIntegral,
-  fromMaybe,
   notElem,
   otherwise,
   show,
@@ -71,46 +68,28 @@ import Language.GraphQL.AST.Document (Name)
 import Language.GraphQL.Error (ResolverException (ResolverException))
 import Language.GraphQL.Type as GQL (
   Arguments (Arguments),
-  EnumType (EnumType),
-  EnumValue (EnumValue),
-  InputField (InputField),
   Resolver (EventStreamResolver, ValueResolver),
-  ScalarType (ScalarType),
   Schema,
   Value (Boolean, Enum, Float, Int, List, Null, Object, String),
-  boolean,
-  float,
-  int,
   schema,
-  string,
  )
-import Language.GraphQL.Type.In (
-  InputObjectType (InputObjectType),
-  Type (NamedInputObjectType),
- )
-import Language.GraphQL.Type.In qualified as In
 import Language.GraphQL.Type.Out qualified as Out
 import Numeric (showFFloat)
 
 import AirGQL.Config (
   maxGraphqlResultCount,
  )
-import AirGQL.GQLWrapper (
-  InArgument (InArgument, argDescMb, argType, valueMb),
-  OutField (OutField, arguments, descriptionMb, fieldType),
-  inArgumentToArgument,
-  outFieldToField,
- )
 
-import AirGQL.Introspection (getSchemaResolver, typeNameResolver)
 import AirGQL.Introspection qualified as Introspection
 import AirGQL.Introspection.Resolver qualified as Introspection
+import AirGQL.Introspection.Types qualified as Introspection
 import AirGQL.Lib (
-  AccessMode (ReadAndWrite, ReadOnly, WriteOnly),
-  ColumnEntry (column_name, datatype, datatype_gql),
-  GqlTypeName (root),
+  AccessMode,
+  ColumnEntry (column_name, datatype),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
+  canRead,
+  canWrite,
   column_name_gql,
   getColumns,
  )
@@ -126,20 +105,6 @@ import AirGQL.Types.Utils (encodeToText)
 import AirGQL.Utils (colToFileUrl, collectErrorList, quoteKeyword, quoteText)
 import Data.Either.Extra qualified as Either
 import Data.List qualified as List
-
-
-typeNameToScalarType :: Maybe GqlTypeName -> ScalarType
-typeNameToScalarType Nothing =
-  ScalarType
-    "any"
-    (Just "A type that could result to any kind of GQL scalar")
-typeNameToScalarType (Just typeName) =
-  case typeName.root of
-    "Int" -> int
-    "Float" -> float
-    "String" -> string
-    "Boolean" -> boolean
-    _ -> string
 
 
 -- | Prevent numbers of being shown with exponents (0.01 instead of 1e-2)
@@ -183,33 +148,6 @@ gqlValueToNullableString value =
     String text -> String text
     Null -> Null
     val -> String $ showGqlValue val
-
-
-colNamesWithValResolver :: [ColumnEntry] -> [(Text, Resolver IO)]
-colNamesWithValResolver columnEntries =
-  columnEntries <&> \colEntry ->
-    let
-      fieldToResolve =
-        Out.Field
-          (Just colEntry.column_name_gql)
-          ( Out.NamedScalarType $
-              typeNameToScalarType
-                colEntry.datatype_gql
-          )
-          mempty
-
-      resolvedValue = do
-        context <- ask
-        pure $ case context.values of
-          Object obj ->
-            case obj & HashMap.lookup colEntry.column_name_gql of
-              Nothing -> String "Error: Field does not exist"
-              Just val -> val
-          _ -> String "Error: Value could not be retrieved"
-    in
-      ( colEntry.column_name_gql
-      , ValueResolver fieldToResolve resolvedValue
-      )
 
 
 buildSortClause :: [ColumnEntry] -> [(Name, Value)] -> Text
@@ -383,311 +321,6 @@ executeSqlQuery
     liftIO $ query_ connection sqlQuery
 
 
-colNamesWithFilterField :: Text -> [ColumnEntry] -> [(Text, InputField)]
-colNamesWithFilterField tableName columnEntries =
-  columnEntries <&> \colEntry ->
-    let
-      inputField =
-        InputField
-          (Just $ "Filter for " <> colEntry.column_name_gql)
-          ( NamedInputObjectType $
-              InputObjectType
-                (doubleXEncodeGql tableName <> "_filter")
-                (Just "Filter object for the column")
-                ( let theInputField =
-                        InputField
-                          (Just "Value to compare to")
-                          ( In.NamedScalarType $
-                              typeNameToScalarType
-                                colEntry.datatype_gql
-                          )
-                          Nothing -- Default value
-                      listInputField =
-                        InputField
-                          (Just "Values to compare to")
-                          ( In.ListType $
-                              In.NamedScalarType $
-                                typeNameToScalarType
-                                  colEntry.datatype_gql
-                          )
-                          Nothing -- Default value
-                  in  HashMap.fromList
-                        [ ("eq", theInputField)
-                        , ("neq", theInputField)
-                        , ("gt", theInputField)
-                        , ("gte", theInputField)
-                        , ("lt", theInputField)
-                        , ("lte", theInputField)
-                        , ("like", theInputField)
-                        , ("ilike", theInputField)
-                        , ("in", listInputField)
-                        , ("nin", listInputField)
-                        ]
-                )
-          )
-          Nothing -- Default value
-    in
-      ( colEntry.column_name_gql
-      , inputField
-      )
-
-
-queryType
-  :: Connection
-  -> AccessMode
-  -> Text
-  -> [TableEntry]
-  -> IO (Out.ObjectType IO)
-queryType connection accessMode dbId tables = do
-  let
-    documentation :: Text
-    documentation =
-      "Available queries for database \"" <> dbId <> "\""
-
-    getOutField :: TableEntry -> IO (Out.Field IO)
-    getOutField table =
-      case Introspection.makeField $ Introspection.tableQueryField table of
-        Left err -> P.throwIO $ userError $ T.unpack err
-        Right result -> pure result
-
-    getDbEntries :: TableEntry -> Out.Resolve IO
-    getDbEntries table = do
-      context <- ask
-
-      rows :: [[SQLData]] <- case context.arguments of
-        Arguments args -> do
-          filterElements <- case args & HashMap.lookup "filter" of
-            Nothing -> pure []
-            Just colToFilter -> case colToFilter of
-              Object filterObj -> case HashMap.toList filterObj of
-                [] -> P.throwIO $ userError "Error: Filter must not be empty"
-                filterElements -> pure filterElements
-              _ -> pure []
-
-          orderElements :: [(Name, Value)] <-
-            case args & HashMap.lookup "order_by" of
-              Nothing -> pure []
-              Just colToOrder -> case colToOrder of
-                List objects ->
-                  -- => [Value]
-                  objects
-                    -- => IO [[(Name, Value)]]
-                    & P.traverse
-                      ( \case
-                          Object orderObject -> case HashMap.toList orderObject of
-                            [] -> P.throwIO $ userError "Error: Order must not be empty"
-                            orderElements -> pure orderElements
-                          _ -> pure [] -- Should not be reachable
-                      )
-                    -- => IO [(Name, Value)]
-                    <&> P.join
-                _ -> pure []
-
-          limitElements :: Maybe P.Int32 <-
-            case args & HashMap.lookup "limit" of
-              Just (Int limit)
-                | limit >= 0 ->
-                    pure (Just limit)
-                | otherwise ->
-                    P.throwIO $
-                      userError
-                        "Error: limit must be positive"
-              _ -> pure Nothing
-
-          paginationMb :: Maybe Pagination <-
-            case (limitElements, args & HashMap.lookup "offset") of
-              (Just limit, Just (Int offset))
-                | offset >= 0 ->
-                    pure $
-                      Just $
-                        Pagination
-                          (fromIntegral limit)
-                          (Just $ fromIntegral offset)
-                | otherwise ->
-                    P.throwIO $ userError "Error: offset must be positive"
-              (Just limit, _) ->
-                pure $
-                  Just $
-                    Pagination
-                      (fromIntegral limit)
-                      Nothing
-              (Nothing, Just (Int _)) ->
-                P.throwIO $
-                  userError
-                    "Error: cannot specify offset \
-                    \without also specifying a limit"
-              _ -> pure Nothing
-
-          let
-            countQuery :: Query
-            countQuery =
-              Query $
-                P.fold
-                  [ "SELECT COUNT() FROM"
-                  , quoteKeyword table.name
-                  , "\n"
-                  , getWhereClause filterElements
-                  ]
-
-          -- Will be equal `Just numRows` when the number of
-          -- returned rows is too large.
-          tooManyReturnedRows :: Maybe Int <- case paginationMb of
-            -- Limit doesn't seem to affect COUNT(),
-            -- so we consider it manually.
-            Just pagination
-              | pagination.limit <= maxGraphqlResultCount ->
-                  pure Nothing
-            _ -> do
-              results <- liftIO $ SS.query_ connection countQuery
-
-              let numRows = case P.head results of
-                    Just numRowsOnly -> SS.fromOnly numRowsOnly
-                    Nothing -> 0
-
-              pure $
-                if numRows > maxGraphqlResultCount
-                  then Just numRows
-                  else Nothing
-
-          P.for_ tooManyReturnedRows $ \numRows -> do
-            P.throwIO $
-              userError $
-                P.fold
-                  [ "The graphql API cannot return more than "
-                  , show maxGraphqlResultCount
-                  , " entries at a time. Your query would have returned "
-                  , show numRows
-                  , " rows. "
-                  , "Consider setting the `limit` argument on your query: `{ "
-                  , T.unpack table.name
-                  , " (limit: 50) { ... } }`"
-                  ]
-
-          liftIO $
-            executeSqlQuery
-              connection
-              table.name
-              table.columns
-              filterElements
-              orderElements
-              paginationMb
-
-      colErrorsToUserError $ rowsToGraphQL dbId table.name table.columns rows
-
-    getOutByPKField :: TableEntry -> IO (Maybe (Out.Field IO))
-    getOutByPKField tableEntry = do
-      let fieldMb = Introspection.tableQueryByPKField tableEntry
-      P.for fieldMb $ \field ->
-        case Introspection.makeField field of
-          Left err -> P.throwIO $ userError $ T.unpack err
-          Right result -> pure result
-
-    getDbEntriesByPK :: TableEntry -> Out.Resolve IO
-    getDbEntriesByPK tableEntry = do
-      context <- ask
-
-      let
-        Arguments args = context.arguments
-        filterElements = do
-          (key, value) <- HashMap.toList args
-          pure (key, Object $ HashMap.singleton "eq" value)
-
-      -- This query can return at most one row, so we don't worry checking for
-      -- COUNT() and asserting it's within the set limits.
-      queryResult <-
-        liftIO $
-          executeSqlQuery
-            connection
-            tableEntry.name
-            tableEntry.columns
-            filterElements
-            []
-            Nothing
-
-      case P.head queryResult of
-        Nothing -> pure Null
-        Just row ->
-          colErrorsToUserError $
-            rowToGraphQL
-              dbId
-              tableEntry.name
-              tableEntry.columns
-              row
-
-    getResolvers :: IO (HashMap.HashMap Text (Resolver IO))
-    getResolvers = do
-      let
-        -- Exceptions must be converted to ResolverExceptions
-        -- to be picked up by the GQL query executor
-        wrapResolver :: Out.Resolve IO -> Out.Resolve IO
-        wrapResolver resolver =
-          catchAll
-            resolver
-            (throw . ResolverException)
-
-        getTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getTableTuple table = do
-          outField <- getOutField table
-          pure
-            ( doubleXEncodeGql table.name
-            , ValueResolver
-                outField
-                $ wrapResolver
-                $ getDbEntries table
-            )
-
-        getTableByPKTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
-        getTableByPKTuple table = do
-          fieldMb <- getOutByPKField table
-          P.for fieldMb $ \outField -> do
-            pure
-              ( doubleXEncodeGql $ table.name <> "_by_pk"
-              , ValueResolver
-                  outField
-                  $ wrapResolver
-                  $ getDbEntriesByPK table
-              )
-
-      queryMany <- P.for tables getTableTuple
-      queryByPKMbs <- P.for tables getTableByPKTuple
-      let queryByPK = P.catMaybes queryByPKMbs
-      pure $ HashMap.fromList $ queryMany <> queryByPK
-
-  resolvers <- getResolvers
-  schemaResolver <- getSchemaResolver accessMode tables
-
-  let
-    -- Resolve = ReaderT Context m Value
-    wrapResolve resolve = do
-      when (accessMode == WriteOnly) $ do
-        throw $
-          ResolverException $
-            userError "Cannot read field using writeonly access code"
-      resolve
-
-    protectResolver = \case
-      ValueResolver field resolve ->
-        ValueResolver field (wrapResolve resolve)
-      EventStreamResolver field resolve subscribe ->
-        EventStreamResolver field (wrapResolve resolve) subscribe
-
-  pure $
-    outObjectTypeToObjectType $
-      OutObjectType
-        { name = "Query"
-        , descriptionMb = Just documentation
-        , interfaceTypes = []
-        , fields =
-            P.fold
-              [ schemaResolver
-              , typeNameResolver
-              , resolvers
-              -- , resolversPrimaryKey)
-              ]
-              <&> protectResolver
-        }
-
-
 -- | WARNING: Also change duplicate `sqlDataToAesonValue`
 sqlDataToGQLValue :: Text -> SQLData -> Either Text Value
 sqlDataToGQLValue datatype sqlData = case (datatype, sqlData) of
@@ -730,109 +363,6 @@ gqlValueToSQLData = \case
   Enum name -> SQLText name
   List aList -> SQLText $ show aList
   Object obj -> SQLText $ show obj
-
-
-mutationTypeNameField :: Text -> (Text, Resolver IO)
-mutationTypeNameField nameOfTable =
-  let
-    typeNameOutField =
-      outFieldToField $
-        OutField
-          { descriptionMb = Just $ "The type name of " <> nameOfTable
-          , fieldType = Out.NonNullScalarType string
-          , arguments = HashMap.empty
-          }
-  in
-    ( "__typename"
-    , ValueResolver typeNameOutField $
-        pure $
-          String $
-            doubleXEncodeGql nameOfTable <> "_mutation_response"
-    )
-
-
-getMutationResponse
-  :: AccessMode
-  -> Text
-  -> [ColumnEntry]
-  -> Out.Type IO
-getMutationResponse accessMode tableName columnEntries =
-  Out.NamedObjectType $
-    outObjectTypeToObjectType $
-      OutObjectType
-        { name = doubleXEncodeGql tableName <> "_mutation_response"
-        , descriptionMb =
-            Just $
-              tableName <> " mutation response description"
-        , interfaceTypes = []
-        , fields =
-            HashMap.fromList $
-              [
-                ( "affected_rows"
-                , let
-                    field :: Out.Field m
-                    field =
-                      outFieldToField $
-                        OutField
-                          { descriptionMb = Just "nonNullInt description"
-                          , fieldType = Out.NonNullScalarType int
-                          , arguments = HashMap.empty
-                          }
-
-                    value :: ReaderT Out.Context IO Value
-                    value = do
-                      context <- ask
-                      case context & Out.values of
-                        Object obj ->
-                          pure $
-                            fromMaybe (Int 0) $
-                              HashMap.lookup "affected_rows" obj
-                        _ -> pure $ Int 0
-                  in
-                    ValueResolver field value
-                )
-              , mutationTypeNameField tableName
-              ]
-                <> case accessMode of
-                  WriteOnly -> []
-                  _ ->
-                    [
-                      ( "returning"
-                      , let
-                          field :: Out.Field IO
-                          field =
-                            outFieldToField $
-                              OutField
-                                { descriptionMb =
-                                    Just
-                                      "Non null seturning description"
-                                , fieldType =
-                                    Out.NonNullListType $
-                                      Out.NamedObjectType $
-                                        Out.ObjectType
-                                          "returning"
-                                          (Just "short desc")
-                                          []
-                                          ( HashMap.fromList $
-                                              colNamesWithValResolver columnEntries
-                                          )
-                                , arguments = HashMap.empty
-                                }
-
-                          value :: ReaderT Out.Context IO Value
-                          value = do
-                            context <- ask
-                            case context & Out.values of
-                              Object obj ->
-                                pure $
-                                  fromMaybe (Object P.mempty) $
-                                    HashMap.lookup "returning" obj
-                              _ -> pure $ Object P.mempty
-                        in
-                          ValueResolver field value
-                      )
-                    ]
-        }
 
 
 rowToGraphQL :: Text -> Text -> [ColumnEntry] -> [SQLData] -> Either [(Text, Text)] Value
@@ -1011,16 +541,257 @@ executeSqlMutation connection tableName args columnEntries filterElements = do
                   then SQLBlob ""
                   else val
         in
-          catchAll
-            ( liftIO $ do
-                setCaseInsensitive connection filterElements
-                query connection sqlQuery valuesToSetNorm
-            )
-            (throw . ResolverException)
+          liftIO $ do
+            setCaseInsensitive connection filterElements
+            query connection sqlQuery valuesToSetNorm
 
   liftIO $
     changes connection
       & P.fmap (,updatedRows)
+
+
+{-| Ties custom resolver logic to a pre-existing field type. The resolver is
+wrapped such that exceptions are caught and converted to the appropriate type
+expected by the GQL query executor.
+-}
+makeResolver
+  :: Introspection.Field
+  -> Out.Resolve IO
+  -> IO (Text, Out.Resolver IO)
+makeResolver field resolve = do
+  case Introspection.makeField field of
+    Left err -> P.throwIO $ userError $ T.unpack err
+    Right outField ->
+      pure
+        ( field.name
+        , ValueResolver
+            outField
+            $ catchAll
+              resolve
+              (throw . ResolverException)
+        )
+
+
+queryType
+  :: Connection
+  -> AccessMode
+  -> Text
+  -> [TableEntry]
+  -> IO (Out.ObjectType IO)
+queryType connection accessMode dbId tables = do
+  let
+    documentation :: Text
+    documentation =
+      "Available queries for database \"" <> dbId <> "\""
+
+    getDbEntries :: TableEntry -> Out.Resolve IO
+    getDbEntries table = do
+      context <- ask
+
+      rows :: [[SQLData]] <- case context.arguments of
+        Arguments args -> do
+          filterElements <- case args & HashMap.lookup "filter" of
+            Nothing -> pure []
+            Just colToFilter -> case colToFilter of
+              Object filterObj -> case HashMap.toList filterObj of
+                [] -> P.throwIO $ userError "Error: Filter must not be empty"
+                filterElements -> pure filterElements
+              _ -> pure []
+
+          orderElements :: [(Name, Value)] <-
+            case args & HashMap.lookup "order_by" of
+              Nothing -> pure []
+              Just colToOrder -> case colToOrder of
+                List objects ->
+                  -- => [Value]
+                  objects
+                    -- => IO [[(Name, Value)]]
+                    & P.traverse
+                      ( \case
+                          Object orderObject -> case HashMap.toList orderObject of
+                            [] -> P.throwIO $ userError "Error: Order must not be empty"
+                            orderElements -> pure orderElements
+                          _ -> pure [] -- Should not be reachable
+                      )
+                    -- => IO [(Name, Value)]
+                    <&> P.join
+                _ -> pure []
+
+          limitElements :: Maybe P.Int32 <-
+            case args & HashMap.lookup "limit" of
+              Just (Int limit)
+                | limit >= 0 ->
+                    pure (Just limit)
+                | otherwise ->
+                    P.throwIO $
+                      userError
+                        "Error: limit must be positive"
+              _ -> pure Nothing
+
+          paginationMb :: Maybe Pagination <-
+            case (limitElements, args & HashMap.lookup "offset") of
+              (Just limit, Just (Int offset))
+                | offset >= 0 ->
+                    pure $
+                      Just $
+                        Pagination
+                          (fromIntegral limit)
+                          (Just $ fromIntegral offset)
+                | otherwise ->
+                    P.throwIO $ userError "Error: offset must be positive"
+              (Just limit, _) ->
+                pure $
+                  Just $
+                    Pagination
+                      (fromIntegral limit)
+                      Nothing
+              (Nothing, Just (Int _)) ->
+                P.throwIO $
+                  userError
+                    "Error: cannot specify offset \
+                    \without also specifying a limit"
+              _ -> pure Nothing
+
+          let
+            countQuery :: Query
+            countQuery =
+              Query $
+                P.fold
+                  [ "SELECT COUNT() FROM"
+                  , quoteKeyword table.name
+                  , "\n"
+                  , getWhereClause filterElements
+                  ]
+
+          -- Will be equal `Just numRows` when the number of
+          -- returned rows is too large.
+          tooManyReturnedRows :: Maybe Int <- case paginationMb of
+            -- Limit doesn't seem to affect COUNT(),
+            -- so we consider it manually.
+            Just pagination
+              | pagination.limit <= maxGraphqlResultCount ->
+                  pure Nothing
+            _ -> do
+              results <- liftIO $ SS.query_ connection countQuery
+
+              let numRows = case P.head results of
+                    Just numRowsOnly -> SS.fromOnly numRowsOnly
+                    Nothing -> 0
+
+              pure $
+                if numRows > maxGraphqlResultCount
+                  then Just numRows
+                  else Nothing
+
+          P.for_ tooManyReturnedRows $ \numRows -> do
+            P.throwIO $
+              userError $
+                P.fold
+                  [ "The graphql API cannot return more than "
+                  , show maxGraphqlResultCount
+                  , " entries at a time. Your query would have returned "
+                  , show numRows
+                  , " rows. "
+                  , "Consider setting the `limit` argument on your query: `{ "
+                  , T.unpack table.name
+                  , " (limit: 50) { ... } }`"
+                  ]
+
+          liftIO $
+            executeSqlQuery
+              connection
+              table.name
+              table.columns
+              filterElements
+              orderElements
+              paginationMb
+
+      colErrorsToUserError $ rowsToGraphQL dbId table.name table.columns rows
+
+    getDbEntriesByPK :: TableEntry -> Out.Resolve IO
+    getDbEntriesByPK tableEntry = do
+      context <- ask
+
+      let
+        Arguments args = context.arguments
+        filterElements = do
+          (key, value) <- HashMap.toList args
+          pure (key, Object $ HashMap.singleton "eq" value)
+
+      -- This query can return at most one row, so we don't worry checking for
+      -- COUNT() and asserting it's within the set limits.
+      queryResult <-
+        liftIO $
+          executeSqlQuery
+            connection
+            tableEntry.name
+            tableEntry.columns
+            filterElements
+            []
+            Nothing
+
+      case P.head queryResult of
+        Nothing -> pure Null
+        Just row ->
+          colErrorsToUserError $
+            rowToGraphQL
+              dbId
+              tableEntry.name
+              tableEntry.columns
+              row
+
+    getResolvers :: IO (HashMap.HashMap Text (Resolver IO))
+    getResolvers = do
+      let
+        getTableTuple :: TableEntry -> IO (Text, Resolver IO)
+        getTableTuple table =
+          makeResolver
+            (Introspection.tableQueryField table)
+            (getDbEntries table)
+
+        getTableByPKTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+        getTableByPKTuple table =
+          P.for (Introspection.tableQueryByPKField table) $ \field ->
+            makeResolver field (getDbEntriesByPK table)
+
+      queryMany <- P.for tables getTableTuple
+      queryByPKMbs <- P.for tables getTableByPKTuple
+      let queryByPK = P.catMaybes queryByPKMbs
+      pure $ HashMap.fromList $ queryMany <> queryByPK
+
+  resolvers <- getResolvers
+  schemaResolver <- Introspection.getSchemaResolver accessMode tables
+
+  let
+    -- Resolve = ReaderT Context m Value
+    wrapResolve resolve = do
+      when (P.not $ canRead accessMode) $ do
+        throw $
+          ResolverException $
+            userError "Cannot read field using writeonly access code"
+      resolve
+
+    protectResolver = \case
+      ValueResolver field resolve ->
+        ValueResolver field (wrapResolve resolve)
+      EventStreamResolver field resolve subscribe ->
+        EventStreamResolver field (wrapResolve resolve) subscribe
+
+  pure $
+    outObjectTypeToObjectType $
+      OutObjectType
+        { name = "Query"
+        , descriptionMb = Just documentation
+        , interfaceTypes = []
+        , fields =
+            P.fold
+              [ schemaResolver
+              , Introspection.typeNameResolver
+              , resolvers
+              -- , resolversPrimaryKey)
+              ]
+              <&> protectResolver
+        }
 
 
 mutationType
@@ -1032,130 +803,6 @@ mutationType
   -> IO (Maybe (Out.ObjectType IO))
 mutationType connection maxRowsPerTable accessMode dbId tables = do
   let
-    documentation =
-      "Available queries for database \"" <> dbId <> "\""
-
-    getTableFilterType :: Text -> [ColumnEntry] -> InputObjectType
-    getTableFilterType tableName columnEntries = do
-      InputObjectType
-        (doubleXEncodeGql tableName <> "_filter")
-        ( Just
-            "Filter objects for the specified columns"
-        )
-        (HashMap.fromList (colNamesWithFilterField tableName columnEntries))
-
-    getOutField :: Text -> IO (Out.Field IO)
-    getOutField tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
-
-      let
-        colNamesWithField :: [(Text, InputField)]
-        colNamesWithField =
-          columnEntries <&> \colEntry ->
-            let
-              inputField =
-                InputField
-                  (Just colEntry.column_name_gql)
-                  ( In.NamedScalarType $
-                      typeNameToScalarType colEntry.datatype_gql
-                  )
-                  Nothing -- Default value
-            in
-              ( colEntry.column_name_gql
-              , inputField
-              )
-
-      let
-        objectsType =
-          inArgumentToArgument $
-            InArgument
-              { argDescMb =
-                  Just
-                    "Objects to be inserted into the database"
-              , argType =
-                  In.ListType $
-                    NamedInputObjectType $
-                      InputObjectType
-                        ( doubleXEncodeGql tableName
-                            <> "_insert_input"
-                        )
-                        ( Just
-                            "Object to be inserted into the database"
-                        )
-                        (HashMap.fromList colNamesWithField)
-              , valueMb = Nothing
-              }
-
-        onConflictDescription =
-          "Specifies how to handle brtoken unique constraints" :: Text
-
-        columnEnumVariants =
-          columnEntries
-            <&> \entry ->
-              (entry.column_name_gql, EnumValue Nothing)
-
-        columnEnumType =
-          EnumType
-            (doubleXEncodeGql tableName <> "_column")
-            (Just "This enum contains a variant for each colum in the table")
-            (HashMap.fromList columnEnumVariants)
-
-        onConflictType =
-          inArgumentToArgument $
-            InArgument
-              { argDescMb = Just onConflictDescription
-              , argType =
-                  In.ListType
-                    $ In.NonNullInputObjectType
-                    $ InputObjectType
-                      ( doubleXEncodeGql tableName
-                          <> "_upsert_on_conflict"
-                      )
-                      (Just onConflictDescription)
-                    $ HashMap.fromList
-                      [
-                        ( "constraint"
-                        , InputField
-                            (Just "columns to handle conflicts of")
-                            ( In.NonNullListType $
-                                In.NonNullEnumType columnEnumType
-                            )
-                            Nothing
-                        )
-                      ,
-                        ( "update_columns"
-                        , InputField
-                            (Just "columns to override on conflict")
-                            ( In.NonNullListType $
-                                In.NonNullEnumType columnEnumType
-                            )
-                            Nothing
-                        )
-                      ,
-                        ( "where"
-                        , InputField
-                            (Just "filter specifying which conflicting columns to update")
-                            ( In.NamedInputObjectType $
-                                getTableFilterType tableName columnEntries
-                            )
-                            Nothing
-                        )
-                      ]
-              , valueMb = Nothing
-              }
-
-      pure $
-        outFieldToField $
-          OutField
-            { descriptionMb = Just "description"
-            , fieldType = getMutationResponse accessMode tableName columnEntries
-            , arguments =
-                HashMap.fromList
-                  [ ("objects", objectsType)
-                  , ("on_conflict", onConflictType)
-                  ]
-            }
-
     getColValue :: HashMap.HashMap Text Value -> Text -> Value
     getColValue rowObj columnName =
       HashMap.findWithDefault Null (doubleXEncodeGql columnName) rowObj
@@ -1303,33 +950,28 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                     _ -> []
                 _ -> []
 
-          -- Exception from SQLite must be converted into
-          -- ResolverExceptions to be picked up by GQL query executor
           returnedRows <-
-            catchAll
-              ( liftIO $ P.forM sqlDataRows $ \sqlDataRow -> do
-                  numRowsRes :: [[Integer]] <-
-                    query_
-                      connection
-                      $ Query
-                      $ "SELECT COUNT() FROM "
-                        <> quoteKeyword tableName
+            liftIO $ P.forM sqlDataRows $ \sqlDataRow -> do
+              numRowsRes :: [[Integer]] <-
+                query_
+                  connection
+                  $ Query
+                  $ "SELECT COUNT() FROM "
+                    <> quoteKeyword tableName
 
-                  case numRowsRes of
-                    [[numRows]] -> do
-                      when (numRows >= maxRowsPerTable) $
-                        P.throwIO $
-                          userError $
-                            "Please upgrade to a Pro account \
-                            \to insert more than "
-                              <> show maxRowsPerTable
-                              <> " rows into a table"
-                    _ -> pure ()
+              case numRowsRes of
+                [[numRows]] -> do
+                  when (numRows >= maxRowsPerTable) $
+                    P.throwIO $
+                      userError $
+                        "Please upgrade to a Pro account \
+                        \to insert more than "
+                          <> show maxRowsPerTable
+                          <> " rows into a table"
+                _ -> pure ()
 
-                  SS.queryNamed connection sqlQuery $
-                    P.zipWith (SS.:=) boundVariableNames sqlDataRow
-              )
-              (throw . ResolverException)
+              SS.queryNamed connection sqlQuery $
+                P.zipWith (SS.:=) boundVariableNames sqlDataRow
 
           -- FIXME:
           --   This should probably be used, but sqlite-simple
@@ -1409,9 +1051,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                     <> "RETURNING "
                     <> columnNamesText
           deletedRows :: [[SQLData]] <-
-            catchAll
-              (liftIO $ query connection sqlQuery [value])
-              (throw . ResolverException)
+            liftIO $ SS.query connection sqlQuery [value]
           numChanges <- liftIO $ changes connection
 
           pure (numChanges, deletedRows)
@@ -1442,136 +1082,26 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
             , ("returning", returning)
             ]
 
-    getOutFieldUpdate :: Text -> IO (Out.Field IO)
-    getOutFieldUpdate tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
-
-      let
-        colNamesWithField :: [(Text, InputField)]
-        colNamesWithField =
-          columnEntries <&> \colEntry ->
-            let
-              inputField =
-                InputField
-                  (Just colEntry.column_name_gql)
-                  ( In.NamedScalarType $
-                      typeNameToScalarType colEntry.datatype_gql
-                  )
-                  Nothing -- Default value
-            in
-              ( colEntry.column_name_gql
-              , inputField
-              )
-
-      pure $
-        outFieldToField $
-          OutField
-            { descriptionMb = Just $ "Provides entries from " <> tableName
-            , fieldType = getMutationResponse accessMode tableName columnEntries
-            , arguments =
-                HashMap.fromList
-                  [
-                    ( "filter"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb = Just "Filter objects"
-                          , argType =
-                              NamedInputObjectType $
-                                getTableFilterType tableName columnEntries
-                          , valueMb = Nothing
-                          }
-                    )
-                  ,
-                    ( "set"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb = Just "Map with new values"
-                          , argType =
-                              NamedInputObjectType $
-                                InputObjectType
-                                  (doubleXEncodeGql tableName <> "_set_input")
-                                  (Just "New values for the specified columns")
-                                  (HashMap.fromList colNamesWithField)
-                          , valueMb = Nothing
-                          }
-                    )
-                  ]
-            }
-
-    getOutFieldDeletion :: Text -> IO (Out.Field IO)
-    getOutFieldDeletion tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
-
-      pure $
-        outFieldToField $
-          OutField
-            { descriptionMb = Just $ "Provides entries from " <> tableName
-            , fieldType = getMutationResponse accessMode tableName columnEntries
-            , arguments =
-                HashMap.fromList
-                  [
-                    ( "filter"
-                    , inArgumentToArgument $
-                        InArgument
-                          { argDescMb = Just "Filter objects"
-                          , argType =
-                              NamedInputObjectType $
-                                InputObjectType
-                                  (doubleXEncodeGql tableName <> "_filter")
-                                  ( Just
-                                      "Filter objects for the specified columns"
-                                  )
-                                  (HashMap.fromList (colNamesWithFilterField tableName columnEntries))
-                          , valueMb = Nothing
-                          }
-                    )
-                  ]
-            }
-    -- -- TODO: Use for retrieving record by primary key
-    -- , arguments = HashMap.fromList $ columnEntries
-    --     <&> (\colEntry ->
-    --           ( colEntry & column_name_gql :: Text
-    --           , inArgumentToArgument $ InArgument
-    --               { argDescMb = Just "Retrieve object by primary key"
-    --               , argType = In.NamedScalarType $
-    --                   typeNameToScalarType $ colEntry & datatype
-    --               , valueMb = Nothing
-    --               }
-    --           )
-    --         )
-
     getMutationResolvers :: IO (HashMap.HashMap Text (Resolver IO))
     getMutationResolvers = do
       let
         getInsertTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getInsertTableTuple table = do
-          outFieldInsertion <- getOutField table.name
-          pure
-            ( "insert_" <> doubleXEncodeGql table.name
-            , ValueResolver
-                outFieldInsertion
-                (executeDbInserts table.name)
-            )
+        getInsertTableTuple table =
+          makeResolver
+            (Introspection.tableInsertField accessMode table)
+            (executeDbInserts table.name)
 
         getUpdateTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getUpdateTableTuple table = do
-          outFieldUpdate <- getOutFieldUpdate table.name
-          pure
-            ( "update_" <> doubleXEncodeGql table.name
-            , ValueResolver
-                outFieldUpdate
-                (executeDbUpdates table.name)
-            )
+        getUpdateTableTuple table =
+          makeResolver
+            (Introspection.tableUpdateField accessMode table)
+            (executeDbUpdates table.name)
 
         getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getDeleteTableTuple table = do
-          outFieldDeletion <- getOutFieldDeletion table.name
-          pure
-            ( "delete_" <> doubleXEncodeGql table.name
-            , ValueResolver
-                outFieldDeletion
-                (executeDbDeletions table.name)
-            )
+        getDeleteTableTuple table =
+          makeResolver
+            (Introspection.tableDeleteField accessMode table)
+            (executeDbDeletions table.name)
 
         getTableTuples :: IO [(Text, Resolver IO)]
         getTableTuples =
@@ -1581,19 +1111,21 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 (\table -> table.object_type == Table)
                 tables
           in
-            sequence $
-              (tablesWithoutViews <&> getInsertTableTuple)
-                <> (tablesWithoutViews <&> getUpdateTableTuple)
-                <> (tablesWithoutViews <&> getDeleteTableTuple)
+            P.for tablesWithoutViews getInsertTableTuple
+              <> P.for tablesWithoutViews getUpdateTableTuple
+              <> P.for tablesWithoutViews getDeleteTableTuple
 
       getTableTuples <&> HashMap.fromList
 
-  Just
-    . Out.ObjectType
-      "Mutation"
-      (Just documentation)
-      []
-    <$> getMutationResolvers
+  if canWrite accessMode
+    then
+      Just
+        . Out.ObjectType
+          "Mutation"
+          Nothing
+          []
+        <$> getMutationResolvers
+    else pure Nothing
 
 
 -- | Automatically generated schema derived from the SQLite database
@@ -1619,10 +1151,6 @@ getDerivedSchema schemaConf connection dbId tables = do
   pure $
     schema
       queries
-      ( case schemaConf.accessMode of
-          ReadOnly -> Nothing
-          WriteOnly -> mutations
-          ReadAndWrite -> mutations
-      )
+      mutations
       Nothing -- subscriptions
       mempty

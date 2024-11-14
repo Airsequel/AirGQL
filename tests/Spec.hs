@@ -8,25 +8,20 @@
 {-# HLINT ignore "Replace case with maybe" #-}
 
 import Protolude (
-  Applicative (pure),
   Bool (False, True),
   Either (Right),
   FilePath,
   IO,
   Maybe (Just, Nothing),
   Monoid (mempty),
-  Text,
   fromMaybe,
   show,
   ($),
   (&),
-  (.),
-  (<$),
   (<>),
  )
 import Protolude qualified as P
 
-import Control.Monad.Catch (catchAll)
 import Data.Aeson (Value (Number))
 import Data.Aeson qualified as Ae
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -118,6 +113,7 @@ import Tests.Utils (
   rmSpaces,
   shouldSaveDbs,
   testRoot,
+  unorderedShouldBe,
   withDataDbConn,
   withTestDbConn,
  )
@@ -2000,31 +1996,36 @@ testSuite = do
             }
           |]
 
-        expected :: Text
         expected =
-          "user error (Column progress cannot be set on conflicts without being explicitly provided)"
+          [raw|
+            {
+              "data": null,
+              "errors": [{
+                "locations": [{ "column": 3, "line": 2 }],
+                "path": ["insert_users"],
+                "message": "user error (Column progress cannot be set on conflicts without being explicitly provided)"
+              }]
+            }
+          |]
 
       conn <- SS.open dbPath
       Right tables <- getEnrichedTables conn
       schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
       Right _ <- graphql schema Nothing mempty firstQuery
-      Just err <-
-        catchAll
-          (Nothing <$ graphql schema Nothing mempty secondQuery)
-          (pure . Just . show)
+      Right err <- graphql schema Nothing mempty secondQuery
 
-      err `shouldBe` expected
+      err `unorderedShouldBe` expected
 
     it "supports deleting data and returning the deleted data" $ do
       conn <- SS.open dbPath
       execute_
         conn
         [sql|
-        insert into users (name, email, created_utc)
-        values
-          ('John', 'john@del-test.com', '2021-01-01T00:00Z'),
-          ('Eve', 'eve@del-test.com', '2021-01-02T00:00Z')
-      |]
+          insert into users (name, email, created_utc)
+          values
+            ('John', 'john@del-test.com', '2021-01-01T00:00Z'),
+            ('Eve', 'eve@del-test.com', '2021-01-02T00:00Z')
+        |]
 
       let
         query =
@@ -2041,21 +2042,24 @@ testSuite = do
               }
             }
           |]
+
         expected =
           rmSpaces
-            [raw|{
-              "data": {
-                "delete_users": {
-                  "affected_rows": 1,
-                  "returning": [
-                    {
-                      "rowid": 2,
-                      "name": "Eve"
-                    }
-                  ]
+            [raw|
+              {
+                "data": {
+                  "delete_users": {
+                    "affected_rows": 1,
+                    "returning": [
+                      {
+                        "rowid": 2,
+                        "name": "Eve"
+                      }
+                    ]
+                  }
                 }
               }
-            }|]
+            |]
 
       Right tables <- getEnrichedTables conn
       schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
@@ -2106,14 +2110,14 @@ testSuite = do
         expected =
           rmSpaces
             [raw|
-            {
-              "data": {
-                "insert_checks": {
-                  "affected_rows": 1
+              {
+                "data": {
+                  "insert_checks": {
+                    "affected_rows": 1
+                  }
                 }
               }
-            }
-          |]
+            |]
 
       Right result <- graphql schema Nothing mempty mutation
 
@@ -2256,7 +2260,7 @@ testSuite = do
       let
         query =
           [gql|
-            mutation InsertUsers ($objects: [users_insert_input]) {
+            mutation InsertUsers ($objects: [users_insert_input!]!) {
               insert_users(objects: $objects) {
                 affected_rows
               }
@@ -2646,16 +2650,16 @@ testSuite = do
           let expected =
                 rmSpaces
                   [raw|{
-                  "data": { "insert_track": null },
-                  "errors": [
-                    {
-                      "locations": [ { "column": 3, "line": 2 } ],
-                      "message":
-                        "SQLite3 returned ErrorConstraint while attempting to perform step: FOREIGN KEY constraint failed",
-                      "path": [ "insert_track" ]
-                    }
-                  ]
-                }|]
+                    "data": null,
+                    "errors": [
+                      {
+                        "locations": [ { "column": 3, "line": 2 } ],
+                        "message":
+                          "SQLite3 returned ErrorConstraint while attempting to perform step: FOREIGN KEY constraint failed",
+                        "path": [ "insert_track" ]
+                      }
+                    ]
+                  }|]
 
           Ae.encode result `shouldBe` expected
 

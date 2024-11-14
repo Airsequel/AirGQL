@@ -3,6 +3,9 @@ module AirGQL.Introspection (
   getSchemaResolver,
   tableQueryField,
   tableQueryByPKField,
+  tableInsertField,
+  tableUpdateField,
+  tableDeleteField,
 )
 where
 
@@ -411,13 +414,12 @@ getSchema accessMode tables = do
 
 -- We make this toplevel, because putting it inside `getSchemaResolver`
 -- means haskell will evaluate it each time, which leads to each execution
--- taking 2-3s
-makeSchemaResolver :: Either Text (Type.Schema -> Resolver IO)
-makeSchemaResolver = do
-  let schemaField = Type.field "__schema" $ Type.nonNull Type.typeSchema
-  ty <- makeType schemaField.type_
-  let gqlField = Out.Field schemaField.description ty mempty
-  pure $ \schema -> Out.ValueResolver gqlField $ pure $ toGraphQL schema
+-- taking 2-3 additional seconds
+schemaField :: Either Text (Out.Field IO)
+schemaField = do
+  let field = Type.field "__schema" $ Type.nonNull Type.typeSchema
+  ty <- makeType field.type_
+  pure $ Out.Field field.description ty mempty
 
 
 getSchemaResolver
@@ -425,8 +427,9 @@ getSchemaResolver
   -> [TableEntry]
   -> IO (HashMap Text (Resolver IO))
 getSchemaResolver accessMode tables = do
-  case makeSchemaResolver of
-    Right make -> do
+  case schemaField of
+    Right field -> do
       let schema = getSchema accessMode tables
-      pure $ HashMap.singleton "__schema" $ make schema
+      let resolver = Out.ValueResolver field $ pure $ toGraphQL schema
+      pure $ HashMap.singleton "__schema" resolver
     Left err -> fail $ T.unpack err
