@@ -1,36 +1,40 @@
 module AirGQL.Introspection.Types (
   Schema (..),
+  Directive (..),
   Name,
   IntrospectionType (..),
   TypeKind (..),
   Field (..),
   InputValue (..),
   EnumValue (..),
-  list,
-  nonNull,
-  field,
-  withArguments,
-  inputValue,
-  inputValueWithDescription,
-  withDescription,
-  withDefaultValue,
-  fieldWithDescription,
-  scalar,
-  object,
-  inputObject,
-  typeSchema,
-  typeIntrospectionType,
-  typeField,
-  typeString,
-  typeInt,
-  typeFloat,
-  typeBool,
-  typeID,
   collectSchemaTypes,
+  deprecatedEnumValue,
+  directive,
+  directiveWithDescription,
   enum,
   enumValue,
   enumValueWithDescription,
-  deprecatedEnumValue,
+  field,
+  fieldWithDescription,
+  inputObject,
+  inputValue,
+  inputValueWithDescription,
+  list,
+  nonNull,
+  object,
+  repeatableDirective,
+  scalar,
+  typeBool,
+  typeField,
+  typeFloat,
+  typeID,
+  typeInt,
+  typeIntrospectionType,
+  typeSchema,
+  typeString,
+  withArguments,
+  withDefaultValue,
+  withDescription,
 ) where
 
 import Protolude (
@@ -50,6 +54,7 @@ import Protolude (
   when,
   ($),
   (&),
+  (<$>),
   (<>),
  )
 
@@ -64,6 +69,7 @@ data Schema = Schema
   , types :: [IntrospectionType]
   , queryType :: IntrospectionType
   , mutationType :: Maybe IntrospectionType
+  , directives :: [Directive]
   }
   deriving (Show, Generic)
 
@@ -343,6 +349,49 @@ deprecatedEnumValue reason (EnumValue{..}) =
     , deprecationReason = Just reason
     , ..
     }
+
+
+data Directive = Directive
+  { name :: Text
+  , description :: Maybe Text
+  , locations :: [Text]
+  , args :: [InputValue]
+  , isRepeatable :: Bool
+  }
+  deriving (Generic, Show)
+
+
+instance ToGraphQL Directive where
+  toGraphQL value =
+    Value.Object $
+      HashMap.fromList
+        [ ("name", toGraphQL value.name)
+        , ("description", toGraphQL value.description)
+        , ("isRepeatable", toGraphQL value.isRepeatable)
+        , ("args", toGraphQL value.args)
+        , ("locations", Value.List $ Value.Enum <$> value.locations)
+        ]
+
+
+directive :: Text -> [Text] -> [InputValue] -> Directive
+directive name locations args =
+  Directive
+    { name = name
+    , args = args
+    , locations = locations
+    , description = Nothing
+    , isRepeatable = False
+    }
+
+
+directiveWithDescription :: Text -> Directive -> Directive
+directiveWithDescription newDesc (Directive{..}) =
+  Directive{description = Just newDesc, ..}
+
+
+repeatableDirective :: Directive -> Directive
+repeatableDirective (Directive{..}) =
+  Directive{isRepeatable = True, ..}
 
 
 {-| Updates the `types` property of a schema to reference

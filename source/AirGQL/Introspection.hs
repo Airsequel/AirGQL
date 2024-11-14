@@ -347,6 +347,10 @@ tableDeleteField accessMode table = do
       ]
 
 
+directives :: [Type.Directive]
+directives = []
+
+
 getSchema
   :: AccessMode
   -> [TableEntry]
@@ -383,6 +387,7 @@ getSchema accessMode tables = do
       []
       (Type.object "Query" queryType)
       (Just $ Type.object "Mutation" mutationType)
+      directives
 
 
 -- We make this toplevel, because putting it inside `getSchemaResolver`
