@@ -101,8 +101,8 @@ rmSpaces text =
       Nothing -> "ERROR: Failed to decode JSON"
 
 
-{-| Checks whether a value would get encoded to a json string. Does not care
-about the order of fields or elements in lists.
+{-| Checks whether a value would get encoded to a given json string.
+Does not care about the order of fields or elements in lists.
 -}
 unorderedShouldBe :: (ToJSON a) => a -> Text -> IO ()
 unorderedShouldBe actual expected = do
