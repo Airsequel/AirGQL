@@ -74,7 +74,7 @@ import Control.Monad.Catch (catchAll)
 import Data.Aeson (FromJSON, ToJSON, Value (Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Scientific qualified as Scientific
-import Data.Text (isInfixOf, toUpper)
+import Data.Text (isInfixOf, isSuffixOf, toUpper)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
   Connection,
@@ -737,7 +737,7 @@ lintTable allEntries parsed =
     illegalName = case parsed.statement of
       CreateTable names _ _
         | Just name <- getFirstName (Just names)
-        , "_by_pk" `isInfixOf` name ->
+        , "_by_pk" `isSuffixOf` name ->
             pure $
               "Table names shouldn't contain \"_by_pk\", yet \""
                 <> name
