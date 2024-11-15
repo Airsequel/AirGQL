@@ -788,7 +788,6 @@ queryType connection accessMode dbId tables = do
               [ schemaResolver
               , Introspection.typeNameResolver
               , resolvers
-              -- , resolversPrimaryKey)
               ]
               <&> protectResolver
         }
