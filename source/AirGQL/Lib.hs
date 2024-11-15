@@ -738,7 +738,10 @@ lintTable allEntries parsed =
       CreateTable names _ _
         | Just name <- getFirstName (Just names)
         , "_by_pk" `isInfixOf` name ->
-            pure "Table names cannot contain \"_by_pk\""
+            pure $
+              "Table names shouldn't contain \"_by_pk\", yet \""
+                <> name
+                <> "\" does"
       _ -> []
   in
     rowidReferenceWarnings <> withoutRowidWarning <> illegalName
