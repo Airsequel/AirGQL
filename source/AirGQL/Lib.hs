@@ -19,6 +19,7 @@ module AirGQL.Lib (
   getTableNames,
   getColumnNames,
   getEnrichedTables,
+  getPKColumns,
   ObjectType (..),
   parseSql,
   replaceCaseInsensitive,
@@ -73,8 +74,9 @@ import Control.Monad (MonadFail (fail))
 import Control.Monad.Catch (catchAll)
 import Data.Aeson (FromJSON, ToJSON, Value (Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.List qualified as List
 import Data.Scientific qualified as Scientific
-import Data.Text (isInfixOf, isSuffixOf, toUpper)
+import Data.Text (isInfixOf, toUpper)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
   Connection,
@@ -733,18 +735,8 @@ lintTable allEntries parsed =
                 <> " does not have a rowid column. "
                 <> "Such tables are not currently supported by Airsequel."
       _ -> []
-
-    illegalName = case parsed.statement of
-      CreateTable names _ _
-        | Just name <- getFirstName (Just names)
-        , "_by_pk" `isSuffixOf` name ->
-            pure $
-              "Table names shouldn't contain \"_by_pk\", yet \""
-                <> name
-                <> "\" does"
-      _ -> []
   in
-    rowidReferenceWarnings <> withoutRowidWarning <> illegalName
+    rowidReferenceWarnings <> withoutRowidWarning
 
 
 {-| Lint the sql code for creating a table
@@ -776,6 +768,21 @@ getRowidColumnName colNames
   | "_rowid_" `notElem` colNames = "_rowid_"
   | "oid" `notElem` colNames = "oid"
   | otherwise = "rowid" -- TODO: Return error to user
+
+
+{-| Select the column(s) that form this table's primary key. If no non-rowid
+columns are marked as part of a PK constraint, the rowid column will be
+returned instead.
+-}
+getPKColumns :: TableEntry -> Maybe [ColumnEntry]
+getPKColumns table = do
+  let pks = List.filter (\col -> col.primary_key) table.columns
+
+  -- We filter out the rowid column, unless it is the only one
+  case pks of
+    [] -> Nothing
+    [first] | first.isRowid -> Just [first]
+    _ -> Just $ List.filter (\col -> P.not col.isRowid) pks
 
 
 columnDefName :: ColumnDef -> Text

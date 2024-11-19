@@ -82,6 +82,7 @@ import AirGQL.Config (
  )
 
 import AirGQL.Introspection qualified as Introspection
+import AirGQL.Introspection.NamingConflict (encodeOutsidePKNames)
 import AirGQL.Introspection.Resolver qualified as Introspection
 import AirGQL.Introspection.Types qualified as Introspection
 import AirGQL.Lib (
@@ -523,8 +524,7 @@ executeUpdateMutation
   -> HashMap Text Value
   -> [(Text, Value)]
   -> IO (Int, [[SQLData]])
-executeUpdateMutation connection table args filterElements = do
-  pairsToSet :: HashMap Text Value <- getArg "set" args
+executeUpdateMutation connection table pairsToSet filterElements = do
   let
     columnsToSet :: [(ColumnEntry, Value)]
     columnsToSet =
@@ -770,7 +770,7 @@ queryType connection accessMode dbId tables = do
 
         getTableByPKTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
         getTableByPKTuple table =
-          P.for (Introspection.tableQueryByPKField table) $ \field ->
+          P.for (Introspection.tableQueryByPKField tables table) $ \field ->
             makeResolver field (getDbEntriesByPK table)
 
       queryMany <- P.for tables getTableTuple
@@ -998,13 +998,14 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       let Arguments args = context.arguments
       liftIO $ do
         filterObj <- getArg "filter" args
+        pairsToSet <- getArg "set" args
         (numOfChanges, updatedRows) <- case HashMap.toList filterObj of
           [] -> P.throwIO $ userError "Error: Filter must not be empty"
           filterElements ->
             executeUpdateMutation
               connection
               table
-              args
+              pairsToSet
               filterElements
 
         mutationResponse table numOfChanges updatedRows
@@ -1019,11 +1020,12 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
               & getByPKFilterElements
 
       liftIO $ do
+        pairsToSet <- getArg (encodeOutsidePKNames table "set") args
         (numOfChanges, updatedRows) <-
           executeUpdateMutation
             connection
             table
-            args
+            pairsToSet
             filterElements
 
         mutationByPKResponse table numOfChanges $ P.head updatedRows
@@ -1083,8 +1085,8 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
         getUpdateByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
         getUpdateByPKTableTuple table =
-          P.for (Introspection.tableUpdateFieldByPk accessMode table) $ \field ->
-            makeResolver field (executeDbUpdatesByPK table)
+          P.for (Introspection.tableUpdateFieldByPk accessMode tables table) $
+            \field -> makeResolver field (executeDbUpdatesByPK table)
 
         getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getDeleteTableTuple table =
@@ -1094,8 +1096,8 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
         getDeleteByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
         getDeleteByPKTableTuple table =
-          P.for (Introspection.tableDeleteFieldByPK accessMode table) $ \field ->
-            makeResolver field (executeDbDeletionsByPK table)
+          P.for (Introspection.tableDeleteFieldByPK accessMode tables table) $
+            \field -> makeResolver field (executeDbDeletionsByPK table)
 
         getTableTuples :: IO [(Text, Resolver IO)]
         getTableTuples =

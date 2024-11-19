@@ -33,12 +33,16 @@ import Language.GraphQL.Type.Out as Out (
   Type (NonNullScalarType),
  )
 
+import AirGQL.Introspection.NamingConflict (
+  encodeOutsidePKNames,
+  encodeOutsideTableNames,
+ )
 import AirGQL.Introspection.Resolver (makeType)
 import AirGQL.Introspection.Types (IntrospectionType)
 import AirGQL.Introspection.Types qualified as Type
 import AirGQL.Lib (
   AccessMode,
-  ColumnEntry (isRowid, primary_key),
+  ColumnEntry,
   GqlTypeName (full, root),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
@@ -46,6 +50,7 @@ import AirGQL.Lib (
   canWrite,
   column_name_gql,
   datatype_gql,
+  getPKColumns,
   isOmittable,
   notnull,
  )
@@ -182,26 +187,20 @@ tableQueryField table =
 
 tablePKArguments :: TableEntry -> Maybe [Type.InputValue]
 tablePKArguments table = do
-  let pks = List.filter (\col -> col.primary_key) table.columns
-
-  -- We filter out the rowid column, unless it is the only one
-  withoutRowid <- case pks of
-    [] -> Nothing
-    [first] | first.isRowid -> Just [first]
-    _ -> Just $ List.filter (\col -> P.not col.isRowid) pks
+  pks <- getPKColumns table
 
   pure $
-    withoutRowid <&> \column -> do
+    pks <&> \column -> do
       let name = doubleXEncodeGql column.column_name_gql
       Type.inputValue name $ Type.nonNull $ columnType column
 
 
-tableQueryByPKField :: TableEntry -> Maybe Type.Field
-tableQueryByPKField table = do
+tableQueryByPKField :: [TableEntry] -> TableEntry -> Maybe Type.Field
+tableQueryByPKField tables table = do
   pkArguments <- tablePKArguments table
   pure $
     Type.field
-      (doubleXEncodeGql table.name <> "_by_pk")
+      (encodeOutsideTableNames tables $ doubleXEncodeGql table.name <> "_by_pk")
       (tableRowType table)
       & Type.fieldWithDescription
         ( "Rows from the table \""
@@ -237,7 +236,6 @@ mutationResponseType accessMode table = do
 
 mutationByPkResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
 mutationByPkResponseType accessMode table = do
-  let tableName = doubleXEncodeGql table.name
   let readonlyFields =
         if canRead accessMode
           then
@@ -247,7 +245,7 @@ mutationByPkResponseType accessMode table = do
           else []
 
   Type.object
-    (tableName <> "_mutation_by_pk_response")
+    (doubleXEncodeGql table.name <> "_mutation_by_pk_response")
     ( [ Type.field "affected_rows" (Type.nonNull Type.typeInt)
       ]
         <> readonlyFields
@@ -363,13 +361,17 @@ tableUpdateField accessMode table = do
       ]
 
 
-tableUpdateFieldByPk :: AccessMode -> TableEntry -> Maybe Type.Field
-tableUpdateFieldByPk accessMode table = do
+tableUpdateFieldByPk
+  :: AccessMode
+  -> [TableEntry]
+  -> TableEntry
+  -> Maybe Type.Field
+tableUpdateFieldByPk accessMode tables table = do
   pkArguments <- tablePKArguments table
 
   let arguments =
         [ Type.inputValue
-            "set"
+            (encodeOutsidePKNames table "set")
             (Type.nonNull $ tableSetInput table)
             & Type.inputValueWithDescription "Fields to be updated"
         ]
@@ -377,7 +379,13 @@ tableUpdateFieldByPk accessMode table = do
 
   pure $
     Type.field
-      ("update_" <> doubleXEncodeGql table.name <> "_by_pk")
+      ( "update_"
+          <> encodeOutsideTableNames
+            tables
+            ( doubleXEncodeGql table.name
+                <> "_by_pk"
+            )
+      )
       (Type.nonNull $ mutationByPkResponseType accessMode table)
       & Type.fieldWithDescription
         ("Update row in table \"" <> table.name <> "\"")
@@ -399,12 +407,20 @@ tableDeleteField accessMode table = do
       ]
 
 
-tableDeleteFieldByPK :: AccessMode -> TableEntry -> Maybe Type.Field
-tableDeleteFieldByPK accessMode table = do
+tableDeleteFieldByPK
+  :: AccessMode
+  -> [TableEntry]
+  -> TableEntry
+  -> Maybe Type.Field
+tableDeleteFieldByPK accessMode tables table = do
   args <- tablePKArguments table
   pure $
     Type.field
-      ("delete_" <> doubleXEncodeGql table.name <> "_by_pk")
+      ( "delete_"
+          <> encodeOutsideTableNames
+            tables
+            (doubleXEncodeGql table.name <> "_by_pk")
+      )
       (Type.nonNull $ mutationByPkResponseType accessMode table)
       & Type.fieldWithDescription
         ("Delete row in table \"" <> table.name <> "\"")
@@ -445,7 +461,7 @@ getSchema accessMode tables = do
         then
           P.fold
             [ tables <&> tableQueryField
-            , tables & P.mapMaybe tableQueryByPKField
+            , tables & P.mapMaybe (tableQueryByPKField tables)
             ]
         else []
 
@@ -462,9 +478,9 @@ getSchema accessMode tables = do
             , tablesWithoutViews <&> tableUpdateField accessMode
             , tablesWithoutViews <&> tableDeleteField accessMode
             , tablesWithoutViews
-                & P.mapMaybe (tableUpdateFieldByPk accessMode)
+                & P.mapMaybe (tableUpdateFieldByPk accessMode tables)
             , tablesWithoutViews
-                & P.mapMaybe (tableDeleteFieldByPK accessMode)
+                & P.mapMaybe (tableDeleteFieldByPK accessMode tables)
             ]
         else []
 

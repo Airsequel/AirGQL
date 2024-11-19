@@ -369,7 +369,7 @@ instance ToGraphQL Directive where
         , ("description", toGraphQL value.description)
         , ("isRepeatable", toGraphQL value.isRepeatable)
         , ("args", toGraphQL value.args)
-        , ("locations", Value.List $ Value.Enum <$> value.locations)
+        , ("locations", toGraphQL $ Value.Enum <$> value.locations)
         ]
 
 
