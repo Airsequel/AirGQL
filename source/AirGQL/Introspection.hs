@@ -5,7 +5,9 @@ module AirGQL.Introspection (
   tableQueryByPKField,
   tableInsertField,
   tableUpdateField,
+  tableUpdateFieldByPk,
   tableDeleteField,
+  tableDeleteFieldByPK,
 )
 where
 
@@ -212,7 +214,7 @@ tableQueryByPKField table = do
 mutationResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
 mutationResponseType accessMode table = do
   let tableName = doubleXEncodeGql table.name
-  let readFields =
+  let readonlyFields =
         if canRead accessMode
           then
             pure
@@ -228,7 +230,7 @@ mutationResponseType accessMode table = do
     (tableName <> "_mutation_response")
     ( [ Type.field "affected_rows" (Type.nonNull Type.typeInt)
       ]
-        <> readFields
+        <> readonlyFields
     )
     & Type.withDescription ("Mutation response for " <> table.name)
 
@@ -236,21 +238,19 @@ mutationResponseType accessMode table = do
 mutationByPkResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
 mutationByPkResponseType accessMode table = do
   let tableName = doubleXEncodeGql table.name
-  let readFields =
+  let readonlyFields =
         if canRead accessMode
           then
-            pure
-              $ Type.field
-                "returning"
-              $ Type.nonNull
-              $ tableRowType table
+            pure $
+              Type.field "returning" $
+                tableRowType table
           else []
 
   Type.object
     (tableName <> "_mutation_by_pk_response")
     ( [ Type.field "affected_rows" (Type.nonNull Type.typeInt)
       ]
-        <> readFields
+        <> readonlyFields
     )
     & Type.withDescription ("Mutation response for " <> table.name)
 

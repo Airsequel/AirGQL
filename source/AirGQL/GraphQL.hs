@@ -47,6 +47,7 @@ import Protolude qualified as P
 import Control.Exception (throw)
 import Control.Monad.Catch (catchAll)
 import Data.Aeson (object, (.=))
+import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
 import Data.List (nub)
 import Data.Ord (Ord (min))
@@ -91,7 +92,6 @@ import AirGQL.Lib (
   canRead,
   canWrite,
   column_name_gql,
-  getColumns,
  )
 import AirGQL.Types.OutObjectType (
   OutObjectType (OutObjectType, descriptionMb, fields, interfaceTypes, name),
@@ -105,6 +105,7 @@ import AirGQL.Types.Utils (encodeToText)
 import AirGQL.Utils (colToFileUrl, collectErrorList, quoteKeyword, quoteText)
 import Data.Either.Extra qualified as Either
 import Data.List qualified as List
+import Language.GraphQL.Class (FromGraphQL (fromGraphQL))
 
 
 -- | Prevent numbers of being shown with exponents (0.01 instead of 1e-2)
@@ -268,6 +269,25 @@ getWhereClause filterElements =
            )
 
 
+-- The gql lib does not offer a way to know what properties have
+-- been requested at the moment, so we always return every column
+getReturningClause :: TableEntry -> Text
+getReturningClause table =
+  "RETURNING "
+    <> ( table.columns
+          <&> column_name
+          <&> quoteKeyword
+          & intercalate ", "
+       )
+
+
+-- | Converts an argument map of (pk, value) pairs into a list of filters
+getByPKFilterElements :: HashMap Text Value -> [(Text, Value)]
+getByPKFilterElements args = do
+  (key, value) <- HashMap.toList args
+  pure (key, Object $ HashMap.singleton "eq" value)
+
+
 setCaseInsensitive :: Connection -> [(Text, Value)] -> IO ()
 setCaseInsensitive connection filterElements = do
   when
@@ -365,12 +385,12 @@ gqlValueToSQLData = \case
   Object obj -> SQLText $ show obj
 
 
-rowToGraphQL :: Text -> Text -> [ColumnEntry] -> [SQLData] -> Either [(Text, Text)] Value
-rowToGraphQL dbId tableName columnEntries row =
+rowToGraphQL :: Text -> TableEntry -> [SQLData] -> Either [(Text, Text)] Value
+rowToGraphQL dbId table row =
   let
     buildMetadataJson :: Text -> Text -> Text
     buildMetadataJson colName rowid =
-      object ["url" .= colToFileUrl dbId tableName colName rowid]
+      object ["url" .= colToFileUrl dbId table.name colName rowid]
         & encodeToText
 
     parseSqlData :: (ColumnEntry, SQLData) -> Either (Text, Text) (Text, Value)
@@ -405,7 +425,7 @@ rowToGraphQL dbId tableName columnEntries row =
               )
   in
     -- => [(ColumnEntry, SQLData)]
-    P.zip columnEntries row
+    P.zip table.columns row
       -- => [Either (Text, Text) (Text, Value)]
       <&> parseSqlData
       -- => Either [(Text, Text)] (Text, Value)
@@ -418,14 +438,13 @@ rowToGraphQL dbId tableName columnEntries row =
 
 rowsToGraphQL
   :: Text
-  -> Text
-  -> [ColumnEntry]
+  -> TableEntry
   -> [[SQLData]]
   -> Either [(Text, Text)] Value
-rowsToGraphQL dbId tableName columnEntries updatedRows =
+rowsToGraphQL dbId table updatedRows =
   updatedRows
     -- => [Either [(Text, Text)] Value]
-    <&> rowToGraphQL dbId tableName columnEntries
+    <&> rowToGraphQL dbId table
     -- => Either [[(Text, Text)]] [Value]
     & collectErrorList
     -- => Either [(Text, Text)] [Value]
@@ -450,100 +469,106 @@ colErrorsToUserError = \case
             "Multiple errors occurred:\n" <> P.unlines errorLines
 
 
-executeSqlMutation
+tryGetArg
+  :: forall m a
+   . (FromGraphQL a)
+  => (MonadIO m)
+  => Text
+  -> HashMap Text Value
+  -> m (Maybe a)
+tryGetArg name args = do
+  case HashMap.lookup name args of
+    Nothing -> pure Nothing
+    Just value ->
+      case fromGraphQL value of
+        Just decoded -> pure $ Just decoded
+        Nothing ->
+          P.throwIO $
+            userError $
+              "Argument " <> T.unpack name <> " has invalid format"
+
+
+getArg
+  :: forall m a
+   . (FromGraphQL a)
+  => (MonadIO m)
+  => Text
+  -> HashMap Text Value
+  -> m a
+getArg name args = do
+  result <- tryGetArg name args
+  case result of
+    Just value -> pure value
+    Nothing ->
+      P.throwIO $
+        userError $
+          "Argument " <> T.unpack name <> " not found"
+
+
+getArgWithDefault
+  :: forall m a
+   . (FromGraphQL a)
+  => (MonadIO m)
+  => Text
+  -> HashMap Text Value
+  -> a
+  -> m a
+getArgWithDefault name args def =
+  tryGetArg name args <&> P.fromMaybe def
+
+
+executeUpdateMutation
   :: Connection
-  -> Text
-  -> HashMap.HashMap Text Value
-  -> [ColumnEntry]
+  -> TableEntry
+  -> HashMap Text Value
   -> [(Text, Value)]
   -> IO (Int, [[SQLData]])
-executeSqlMutation connection tableName args columnEntries filterElements = do
+executeUpdateMutation connection table args filterElements = do
+  pairsToSet :: HashMap Text Value <- getArg "set" args
   let
-    colNamesToUpdateRaw :: [Text]
-    colNamesToUpdateRaw =
-      case HashMap.lookup "set" args of
-        Just (Object dataObj) -> HashMap.keys dataObj
-        _ -> []
+    columnsToSet :: [(ColumnEntry, Value)]
+    columnsToSet =
+      table.columns
+        & P.mapMaybe
+          ( \col -> case HashMap.lookup col.column_name_gql pairsToSet of
+              Just value -> Just (col, value)
+              _ -> Nothing
+          )
 
-    colNamesToUpdate :: [Text]
-    colNamesToUpdate =
-      columnEntries
-        <&> column_name
-        <&> ( \columnName ->
-                if doubleXEncodeGql columnName `P.elem` colNamesToUpdateRaw
-                  then Just columnName
-                  else Nothing
-            )
-        & P.catMaybes
-
-    columnNamesText :: Text
-    columnNamesText =
-      columnEntries
-        <&> column_name
-        <&> quoteKeyword
+    columnsToSetText :: Text
+    columnsToSetText =
+      columnsToSet
+        <&> (\(col, _) -> quoteKeyword col.column_name <> " = ?")
         & intercalate ", "
-
-    setText :: Text
-    setText =
-      colNamesToUpdate
-        <&> (\columnName -> quoteKeyword columnName <> " = ?")
-        & intercalate ", "
-
-    valuesToSet :: [SQLData]
-    valuesToSet =
-      case HashMap.lookup "set" args of
-        Just (Object dataObj) ->
-          columnEntries
-            <&> column_name
-            <&> ( \columnName ->
-                    HashMap.lookup
-                      (doubleXEncodeGql columnName)
-                      dataObj
-                )
-            & P.catMaybes
-            <&> gqlValueToSQLData
-        _ -> []
 
   updatedRows :: [[SQLData]] <-
-    if setText == ""
+    if P.null columnsToSet
       then pure []
-      else
+      else liftIO $ do
         let
           sqlQuery =
             Query $
               "UPDATE "
-                <> quoteKeyword tableName
+                <> quoteKeyword table.name
                 <> "\n"
                 <> "SET "
-                <> setText
+                <> columnsToSetText
                 <> "\n"
                 <> getWhereClause filterElements
                 <> "\n"
-                <> "RETURNING "
-                <> columnNamesText
-
-          colTypesToUpdate :: [Text]
-          colTypesToUpdate =
-            columnEntries
-              <&> ( \colEntry ->
-                      if doubleXEncodeGql colEntry.column_name
-                        `P.elem` colNamesToUpdateRaw
-                        then Just colEntry.datatype
-                        else Nothing
-                  )
-              & P.catMaybes
+                <> getReturningClause table
 
           valuesToSetNorm =
-            P.zip valuesToSet colTypesToUpdate
-              <&> \(val, datatype) ->
-                if (val == SQLText "{}")
-                  P.&& ("BLOB" `T.isPrefixOf` T.toUpper datatype)
+            columnsToSet
+              <&> \(col, gqlValue) -> do
+                let sqlValue = gqlValueToSQLData gqlValue
+                if (sqlValue == SQLText "{}")
+                  P.&& ("BLOB" `T.isPrefixOf` T.toUpper col.datatype)
                   then SQLBlob ""
-                  else val
-        in
-          liftIO $ do
-            setCaseInsensitive connection filterElements
-            query connection sqlQuery valuesToSetNorm
+                  else sqlValue
+
+        setCaseInsensitive connection filterElements
+        query connection sqlQuery valuesToSetNorm
 
   liftIO $
     changes connection
@@ -706,17 +731,12 @@ queryType connection accessMode dbId tables = do
               orderElements
               paginationMb
 
-      colErrorsToUserError $ rowsToGraphQL dbId table.name table.columns rows
+      colErrorsToUserError $ rowsToGraphQL dbId table rows
 
     getDbEntriesByPK :: TableEntry -> Out.Resolve IO
     getDbEntriesByPK tableEntry = do
       context <- ask
-
-      let
-        Arguments args = context.arguments
-        filterElements = do
-          (key, value) <- HashMap.toList args
-          pure (key, Object $ HashMap.singleton "eq" value)
+      let Arguments args = context.arguments
 
       -- This query can return at most one row, so we don't worry checking for
       -- COUNT() and asserting it's within the set limits.
@@ -726,7 +746,7 @@ queryType connection accessMode dbId tables = do
             connection
             tableEntry.name
             tableEntry.columns
-            filterElements
+            (getByPKFilterElements args)
             []
             Nothing
 
@@ -736,8 +756,7 @@ queryType connection accessMode dbId tables = do
           colErrorsToUserError $
             rowToGraphQL
               dbId
-              tableEntry.name
-              tableEntry.columns
+              tableEntry
               row
 
     getResolvers :: IO (HashMap.HashMap Text (Resolver IO))
@@ -806,105 +825,102 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
     getColValue rowObj columnName =
       HashMap.findWithDefault Null (doubleXEncodeGql columnName) rowObj
 
-    executeDbInserts :: Text -> ReaderT Out.Context IO Value
-    executeDbInserts tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
+    mutationResponse :: TableEntry -> Int -> [[SQLData]] -> IO Value
+    mutationResponse table numChanges rows = do
+      returning <-
+        colErrorsToUserError $
+          rowsToGraphQL dbId table rows
 
+      pure $
+        Object $
+          HashMap.fromList
+            [ ("affected_rows", Int $ fromIntegral numChanges)
+            , ("returning", returning)
+            ]
+
+    mutationByPKResponse :: TableEntry -> Int -> Maybe [SQLData] -> IO Value
+    mutationByPKResponse table numChanges mbRow = do
+      returning <- case mbRow of
+        Nothing -> pure Null
+        Just row ->
+          colErrorsToUserError $
+            rowToGraphQL dbId table row
+
+      pure $
+        Object $
+          HashMap.fromList
+            [ ("affected_rows", Int $ fromIntegral numChanges)
+            , ("returning", returning)
+            ]
+
+    executeDbInserts :: TableEntry -> ReaderT Out.Context IO Value
+    executeDbInserts table = do
       context <- ask
       let
-        columnNames :: [Text]
-        columnNames =
-          columnEntries <&> column_name
-
-        columnNamesText :: Text
-        columnNamesText =
-          columnNames
-            <&> quoteKeyword
-            & intercalate ", "
-
         insertInDb :: Arguments -> ReaderT Out.Context IO (Int, [[SQLData]])
         insertInDb (Arguments argMap) = do
+          -- Yields for example:
+          --   [ { name: "John", email: "john@example.com" }
+          --   , { name: "Eve",  email: "eve@example.com" }
+          --   ]
+          values :: [HashMap Text Value] <- getArg "objects" argMap
           let
-            -- Yields for example:
-            --   [ { name: "John", email: "john@example.com" }
-            --   , { name: "Eve",  email: "eve@example.com" }
-            --   ]
-            entries =
-              HashMap.findWithDefault
-                (List [])
-                "objects"
-                argMap
-
             -- All colums that are contained in the entries
             containedColumns :: [Text]
             containedColumns =
-              case entries of
-                List values ->
-                  ( values
-                      <&> \case
-                        Object rowObj ->
-                          HashMap.keys rowObj
-                        _ -> []
-                  )
-                    & P.concat
-                    & nub
-                    <&> doubleXDecode
-                _ -> []
+              values
+                <&> HashMap.keys
+                & P.concat
+                & nub
+                <&> doubleXDecode
 
             boundVariableNames :: [Text]
             boundVariableNames =
               containedColumns
                 <&> (\name -> ":" <> doubleXEncodeGql name)
 
-            onConflictArg =
-              case HashMap.lookup "on_conflict" argMap of
-                Just (List values) -> values
-                _ -> []
+          onConflictArg :: [HashMap Text Value] <-
+            getArgWithDefault "on_conflict" argMap []
 
-          onConflictClauses <- P.for onConflictArg $ \case
-            Object fields -> do
-              let
-                getColumnList fieldName = do
-                  case HashMap.lookup fieldName fields of
-                    Just (List elements) -> do
-                      element <- elements
-                      case element of
-                        Enum columnName -> pure columnName
-                        _ -> []
-                    _ -> []
+          onConflictClauses <- P.for onConflictArg $ \fields -> do
+            let
+              getColumnList fieldName =
+                getArgWithDefault fieldName fields []
+                  <&> P.mapMaybe
+                    ( \case
+                        Enum columnName -> Just columnName
+                        _ -> Nothing
+                    )
 
-                constraint = getColumnList "constraint"
-                update = getColumnList "update_columns"
+            constraint <- getColumnList "constraint"
+            update <- getColumnList "update_columns"
 
-              updateClauses <- P.for update $ \column -> do
-                when (column `notElem` containedColumns) $ do
-                  P.throwIO $
-                    userError $
-                      "Column "
-                        <> T.unpack column
-                        <> " cannot be set on conflicts without being explicitly provided"
-
-                pure $
-                  quoteKeyword column
-                    <> " = :"
-                    <> doubleXEncodeGql column
-
-              let
-                filterElements = case HashMap.lookup "where" fields of
-                  Just (Object filterObj) -> HashMap.toList filterObj
-                  _ -> []
+            updateClauses <- P.for update $ \column -> do
+              when (column `notElem` containedColumns) $ do
+                P.throwIO $
+                  userError $
+                    "Column "
+                      <> T.unpack column
+                      <> " cannot be set on conflicts without \
+                         \ being explicitly provided"
 
               pure $
-                "ON CONFLICT ("
-                  <> ( constraint
-                        <&> quoteKeyword
-                        & intercalate "<>"
-                     )
-                  <> ")\n DO UPDATE SET \n"
-                  <> intercalate ",\n" updateClauses
-                  <> "\n"
-                  <> getWhereClause filterElements
-            _ -> pure ""
+                quoteKeyword column
+                  <> " = :"
+                  <> doubleXEncodeGql column
+
+            filterElements <- getArgWithDefault "where" fields mempty
+
+            pure $
+              "ON CONFLICT ("
+                <> ( constraint
+                      <&> quoteKeyword
+                      & intercalate ", "
+                   )
+                <> ")\n DO UPDATE SET \n"
+                <> intercalate ",\n" updateClauses
+                <> "\n"
+                <> getWhereClause (HashMap.toList filterElements)
 
           let
             columnList =
@@ -926,28 +942,21 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                     <> ")"
             sqlQuery =
               Query $
-                "INSERT INTO "
-                  <> quoteKeyword tableName
-                  <> columnList
-                  <> insertedValues
-                  <> "\n"
-                  <> P.unlines onConflictClauses
-                  <> "RETURNING "
-                  <>
-                  -- TODO: Only return the actually requested values
-                  columnNamesText
+                P.unlines
+                  [ "INSERT INTO "
+                      <> quoteKeyword table.name
+                      <> columnList
+                  , insertedValues
+                  , P.unlines onConflictClauses
+                  , getReturningClause table
+                  ]
 
             sqlDataRows :: [[SQLData]]
             sqlDataRows =
-              case entries of
-                List values ->
-                  values <&> \case
-                    Object rowObj ->
-                      containedColumns
-                        <&> getColValue rowObj
-                        <&> gqlValueToSQLData
-                    _ -> []
-                _ -> []
+              values <&> \rowObj ->
+                containedColumns
+                  <&> getColValue rowObj
+                  <&> gqlValueToSQLData
 
           returnedRows <-
             liftIO $ P.forM sqlDataRows $ \sqlDataRow -> do
@@ -956,7 +965,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                   connection
                   $ Query
                   $ "SELECT COUNT() FROM "
-                    <> quoteKeyword tableName
+                    <> quoteKeyword table.name
 
               case numRowsRes of
                 [[numRows]] -> do
@@ -980,106 +989,82 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
           pure (P.length sqlDataRows, returnedRows & P.concat)
 
       (numOfChanges, returnedRows) <- insertInDb context.arguments
-      returning <-
-        colErrorsToUserError $
-          rowsToGraphQL dbId tableName columnEntries returnedRows
-
-      pure $
-        Object $
-          HashMap.fromList
-            [ ("affected_rows", Int $ fromIntegral numOfChanges)
-            , ("returning", returning)
-            ]
+      liftIO $ mutationResponse table numOfChanges returnedRows
 
     -- Execute SQL query to update selected entries
-    executeDbUpdates :: Text -> ReaderT Out.Context IO Value
-    executeDbUpdates tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
-
+    executeDbUpdates :: TableEntry -> ReaderT Out.Context IO Value
+    executeDbUpdates table = do
       context <- ask
-
       let Arguments args = context.arguments
-
-      (numOfChanges, updatedRows) <- case HashMap.lookup "filter" args of
-        Just (Object filterObj) -> case HashMap.toList filterObj of
+      liftIO $ do
+        filterObj <- getArg "filter" args
+        (numOfChanges, updatedRows) <- case HashMap.toList filterObj of
           [] -> P.throwIO $ userError "Error: Filter must not be empty"
           filterElements ->
-            liftIO $
-              executeSqlMutation
-                connection
-                tableName
-                args
-                columnEntries
-                filterElements
-        _ -> pure (0, [])
+            executeUpdateMutation
+              connection
+              table
+              args
+              filterElements
 
-      returning <-
-        colErrorsToUserError $
-          rowsToGraphQL dbId tableName columnEntries updatedRows
+        mutationResponse table numOfChanges updatedRows
 
-      pure $
-        Object $
-          HashMap.fromList
-            [ ("affected_rows", Int $ fromIntegral (numOfChanges :: Int))
-            , ("returning", returning)
-            ]
+    executeDbUpdatesByPK :: TableEntry -> ReaderT Out.Context IO Value
+    executeDbUpdatesByPK table = do
+      context <- ask
+      let Arguments args = context.arguments
+      let filterElements =
+            args
+              & HashMap.delete "set"
+              & getByPKFilterElements
+
+      liftIO $ do
+        (numOfChanges, updatedRows) <-
+          executeUpdateMutation
+            connection
+            table
+            args
+            filterElements
+
+        mutationByPKResponse table numOfChanges $ P.head updatedRows
 
     -- Execute SQL query to delete selected entries
-    executeDbDeletions :: Text -> ReaderT Out.Context IO Value
-    executeDbDeletions tableName = do
-      columnEntries <- liftIO $ getColumns dbId connection tableName
+    executeDbDeletions :: TableEntry -> ReaderT Out.Context IO Value
+    executeDbDeletions table = do
       context <- ask
+      let Arguments args = context.arguments
 
-      let
-        columnNamesText :: Text
-        columnNamesText =
-          columnEntries
-            <&> column_name
-            <&> quoteKeyword
-            & intercalate ", "
+      liftIO $ do
+        filterElements <- getArg "filter" args
+        let sqlQuery =
+              Query $
+                P.unlines
+                  [ "DELETE FROM " <> quoteKeyword table.name
+                  , getWhereClause $ HashMap.toList filterElements
+                  , getReturningClause table
+                  ]
 
-        deleteEntry columnName value = do
-          let sqlQuery =
-                Query $
-                  "DELETE FROM "
-                    <> quoteKeyword tableName
-                    <> " \
-                       \WHERE "
-                    <> quoteKeyword columnName
-                    <> " = ?\n"
-                    <> "RETURNING "
-                    <> columnNamesText
-          deletedRows :: [[SQLData]] <-
-            liftIO $ SS.query connection sqlQuery [value]
-          numChanges <- liftIO $ changes connection
+        deletedRows :: [[SQLData]] <- SS.query_ connection sqlQuery
+        numOfChanges <- SS.changes connection
+        mutationResponse table numOfChanges deletedRows
 
-          pure (numChanges, deletedRows)
+    executeDbDeletionsByPK :: TableEntry -> ReaderT Out.Context IO Value
+    executeDbDeletionsByPK table = do
+      context <- ask
+      let Arguments args = context.arguments
 
-      (numOfChanges, deletedRows) <- case context.arguments of
-        Arguments args -> case HashMap.lookup "filter" args of
-          Just colToFilter -> case colToFilter of
-            Object filterObj -> case HashMap.toList filterObj of
-              [(columnName, Object operatorAndValue)] -> do
-                case HashMap.toList operatorAndValue of
-                  [("eq", String value)] ->
-                    deleteEntry columnName value
-                  [("eq", Int value)] ->
-                    deleteEntry columnName $ show value
-                  _ -> pure (0, [])
-              _ -> pure (0, [])
-            _ -> pure (0, [])
-          Nothing -> pure (0, [])
+      liftIO $ do
+        let sqlQuery =
+              Query $
+                P.unlines
+                  [ "DELETE FROM " <> quoteKeyword table.name
+                  , getWhereClause $ getByPKFilterElements args
+                  , getReturningClause table
+                  ]
 
-      returning <-
-        colErrorsToUserError $
-          rowsToGraphQL dbId tableName columnEntries deletedRows
-
-      pure $
-        Object $
-          HashMap.fromList
-            [ ("affected_rows", Int $ fromIntegral numOfChanges)
-            , ("returning", returning)
-            ]
+        deletedRows :: [[SQLData]] <- SS.query_ connection sqlQuery
+        numOfChanges <- SS.changes connection
+        mutationByPKResponse table numOfChanges $ P.head deletedRows
 
     getMutationResolvers :: IO (HashMap.HashMap Text (Resolver IO))
     getMutationResolvers = do
@@ -1088,19 +1073,29 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
         getInsertTableTuple table =
           makeResolver
             (Introspection.tableInsertField accessMode table)
-            (executeDbInserts table.name)
+            (executeDbInserts table)
 
         getUpdateTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getUpdateTableTuple table =
           makeResolver
             (Introspection.tableUpdateField accessMode table)
-            (executeDbUpdates table.name)
+            (executeDbUpdates table)
+
+        getUpdateByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+        getUpdateByPKTableTuple table =
+          P.for (Introspection.tableUpdateFieldByPk accessMode table) $ \field ->
+            makeResolver field (executeDbUpdatesByPK table)
 
         getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
         getDeleteTableTuple table =
           makeResolver
             (Introspection.tableDeleteField accessMode table)
-            (executeDbDeletions table.name)
+            (executeDbDeletions table)
+
+        getDeleteByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+        getDeleteByPKTableTuple table =
+          P.for (Introspection.tableDeleteFieldByPK accessMode table) $ \field ->
+            makeResolver field (executeDbDeletionsByPK table)
 
         getTableTuples :: IO [(Text, Resolver IO)]
         getTableTuples =
@@ -1110,9 +1105,15 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 (\table -> table.object_type == Table)
                 tables
           in
-            P.for tablesWithoutViews getInsertTableTuple
-              <> P.for tablesWithoutViews getUpdateTableTuple
-              <> P.for tablesWithoutViews getDeleteTableTuple
+            P.fold
+              [ P.for tablesWithoutViews getInsertTableTuple
+              , P.for tablesWithoutViews getUpdateTableTuple
+              , P.for tablesWithoutViews getDeleteTableTuple
+              , P.for tablesWithoutViews getUpdateByPKTableTuple
+                  <&> P.catMaybes
+              , P.for tablesWithoutViews getDeleteByPKTableTuple
+                  <&> P.catMaybes
+              ]
 
       getTableTuples <&> HashMap.fromList
 
