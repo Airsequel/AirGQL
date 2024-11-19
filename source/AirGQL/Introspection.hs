@@ -178,8 +178,8 @@ tableQueryField table =
         ]
 
 
-tableQueryByPKField :: TableEntry -> Maybe Type.Field
-tableQueryByPKField table = do
+tablePKArguments :: TableEntry -> Maybe [Type.InputValue]
+tablePKArguments table = do
   let pks = List.filter (\col -> col.primary_key) table.columns
 
   -- We filter out the rowid column, unless it is the only one
@@ -188,11 +188,15 @@ tableQueryByPKField table = do
     [first] | first.isRowid -> Just [first]
     _ -> Just $ List.filter (\col -> P.not col.isRowid) pks
 
-  let pkArguments =
-        withoutRowid <&> \column -> do
-          let name = doubleXEncodeGql column.column_name_gql
-          Type.inputValue name $ Type.nonNull $ columnType column
+  pure $
+    withoutRowid <&> \column -> do
+      let name = doubleXEncodeGql column.column_name_gql
+      Type.inputValue name $ Type.nonNull $ columnType column
 
+
+tableQueryByPKField :: TableEntry -> Maybe Type.Field
+tableQueryByPKField table = do
+  pkArguments <- tablePKArguments table
   pure $
     Type.field
       (doubleXEncodeGql table.name <> "_by_pk")
@@ -222,6 +226,28 @@ mutationResponseType accessMode table = do
 
   Type.object
     (tableName <> "_mutation_response")
+    ( [ Type.field "affected_rows" (Type.nonNull Type.typeInt)
+      ]
+        <> readFields
+    )
+    & Type.withDescription ("Mutation response for " <> table.name)
+
+
+mutationByPkResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
+mutationByPkResponseType accessMode table = do
+  let tableName = doubleXEncodeGql table.name
+  let readFields =
+        if canRead accessMode
+          then
+            pure
+              $ Type.field
+                "returning"
+              $ Type.nonNull
+              $ tableRowType table
+          else []
+
+  Type.object
+    (tableName <> "_mutation_by_pk_response")
     ( [ Type.field "affected_rows" (Type.nonNull Type.typeInt)
       ]
         <> readFields
@@ -300,23 +326,25 @@ tableInsertField accessMode table = do
       ]
 
 
-tableUpdateField :: AccessMode -> TableEntry -> Type.Field
-tableUpdateField accessMode table = do
+tableSetInput :: TableEntry -> Type.IntrospectionType
+tableSetInput table =
   let
-    tableName = doubleXEncodeGql table.name
-
     fields =
       table.columns <&> \columnEntry -> do
         let colName = columnEntry.column_name_gql
         let base = columnType columnEntry
         Type.inputValue colName base
+  in
+    Type.inputObject
+      (doubleXEncodeGql table.name <> "_set_input")
+      fields
+      & Type.withDescription
+        ("Fields to set for " <> table.name)
 
-    updateRow =
-      Type.inputObject
-        (tableName <> "_set_input")
-        fields
-        & Type.withDescription
-          ("Fields to set for " <> table.name)
+
+tableUpdateField :: AccessMode -> TableEntry -> Type.Field
+tableUpdateField accessMode table = do
+  let tableName = doubleXEncodeGql table.name
 
   Type.field
     ("update_" <> tableName)
@@ -326,13 +354,34 @@ tableUpdateField accessMode table = do
     & Type.withArguments
       [ Type.inputValue
           "set"
-          (Type.nonNull updateRow)
+          (Type.nonNull $ tableSetInput table)
           & Type.inputValueWithDescription "Fields to be updated"
       , Type.inputValue
           "filter"
           (Type.nonNull $ filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be updated"
       ]
+
+
+tableUpdateFieldByPk :: AccessMode -> TableEntry -> Maybe Type.Field
+tableUpdateFieldByPk accessMode table = do
+  pkArguments <- tablePKArguments table
+
+  let arguments =
+        [ Type.inputValue
+            "set"
+            (Type.nonNull $ tableSetInput table)
+            & Type.inputValueWithDescription "Fields to be updated"
+        ]
+          <> pkArguments
+
+  pure $
+    Type.field
+      ("update_" <> doubleXEncodeGql table.name <> "_by_pk")
+      (Type.nonNull $ mutationByPkResponseType accessMode table)
+      & Type.fieldWithDescription
+        ("Update row in table \"" <> table.name <> "\"")
+      & Type.withArguments arguments
 
 
 tableDeleteField :: AccessMode -> TableEntry -> Type.Field
@@ -348,6 +397,18 @@ tableDeleteField accessMode table = do
           (Type.nonNull $ filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be deleted"
       ]
+
+
+tableDeleteFieldByPK :: AccessMode -> TableEntry -> Maybe Type.Field
+tableDeleteFieldByPK accessMode table = do
+  args <- tablePKArguments table
+  pure $
+    Type.field
+      ("delete_" <> doubleXEncodeGql table.name <> "_by_pk")
+      (Type.nonNull $ mutationByPkResponseType accessMode table)
+      & Type.fieldWithDescription
+        ("Delete row in table \"" <> table.name <> "\"")
+      & Type.withArguments args
 
 
 directives :: [Type.Directive]
@@ -400,6 +461,10 @@ getSchema accessMode tables = do
             [ tablesWithoutViews <&> tableInsertField accessMode
             , tablesWithoutViews <&> tableUpdateField accessMode
             , tablesWithoutViews <&> tableDeleteField accessMode
+            , tablesWithoutViews
+                & P.mapMaybe (tableUpdateFieldByPk accessMode)
+            , tablesWithoutViews
+                & P.mapMaybe (tableDeleteFieldByPK accessMode)
             ]
         else []
 
