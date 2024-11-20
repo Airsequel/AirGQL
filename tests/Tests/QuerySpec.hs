@@ -10,8 +10,6 @@ import Protolude (
   Maybe (Nothing),
   Monoid (mempty),
   bracket_,
-  finally,
-  flip,
   fromMaybe,
   show,
   void,
@@ -24,7 +22,7 @@ import Database.SQLite.Simple.QQ (sql)
 import Language.GraphQL.JSON (graphql)
 import Language.GraphQL.TH (gql)
 import System.FilePath ((</>))
-import Test.Hspec (Spec, before_, describe, it, pendingWith, shouldBe, shouldContain)
+import Test.Hspec (Spec, before_, describe, it, shouldBe, shouldContain)
 
 import AirGQL.GraphQL (getDerivedSchema)
 import AirGQL.Lib (getEnrichedTables)
@@ -836,3 +834,127 @@ main = void $ do
                 |]
 
       Ae.encode result `shouldBe` expected
+
+  it "treats NULL as a value when using 'neq' filters" $ do
+    conn <- SS.open dbPath
+    SS.execute_
+      conn
+      [sql|
+        insert into users (name, email, created_utc)
+        values
+          (NULL, 'john@example.com', '2021-01-01T00:00Z'),
+          ('Eve', 'eve@example.com', '2021-01-02T00:00Z')
+      |]
+
+    let
+      query =
+        [gql|
+            query {
+              users(filter: { name: { neq: "Eve" }}) {
+                name, email
+              }
+            }
+          |]
+
+      expected =
+        rmSpaces
+          [raw|{
+              "data": {
+                "users": [{
+                  "name": null,
+                  "email": "john@example.com"
+                }]
+              }
+            }|]
+
+    Right tables <- getEnrichedTables conn
+    schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+    Right result <- graphql schema Nothing mempty query
+
+    Ae.encode result `shouldBe` expected
+
+  it "treats NULL as a value when using 'nin' filters" $ do
+    conn <- SS.open dbPath
+    SS.execute_
+      conn
+      [sql|
+        insert into users (name, email, created_utc)
+        values
+          ('Eve', 'eve@example.com', '2021-01-01T00:00Z'),
+          ('Jon', 'jon@example.com', '2021-01-02T00:00Z'),
+          ('Arbuckle', 'arbuckle@example.com', '2021-01-03T00:00Z'),
+          (NULL, 'adam@example.com', '2021-01-04T00:00Z')
+      |]
+
+    let
+      query =
+        [gql|
+            query {
+              users(filter: { name: { nin: ["Eve", "Arbuckle"]}}) {
+                name, email
+              }
+            }
+          |]
+
+      expected =
+        rmSpaces
+          [raw|{
+              "data": {
+                "users": [{
+                  "name": "Jon",
+                  "email": "jon@example.com"
+                }, {
+                  "name": null,
+                  "email": "adam@example.com"
+                }]
+              }
+            }|]
+
+    Right tables <- getEnrichedTables conn
+    schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+    Right result <- graphql schema Nothing mempty query
+
+    Ae.encode result `shouldBe` expected
+
+  it "supports 'in' filters" $ do
+    conn <- SS.open dbPath
+    SS.execute_
+      conn
+      [sql|
+        insert into users (name, email, created_utc)
+        values
+          ('Eve', 'eve@example.com', '2021-01-01T00:00Z'),
+          ('Jon', 'jon@example.com', '2021-01-02T00:00Z'),
+          ('Arbuckle', 'arbuckle@example.com', '2021-01-03T00:00Z'),
+          (NULL, 'adam@example.com', '2021-01-04T00:00Z')
+      |]
+
+    let
+      query =
+        [gql|
+            query {
+              users(filter: { name: { in: ["Eve", "Arbuckle"]}}) {
+                name, email
+              }
+            }
+          |]
+
+      expected =
+        rmSpaces
+          [raw|{
+              "data": {
+                "users": [{
+                  "name": "Eve",
+                  "email": "eve@example.com"
+                }, {
+                  "name": "Arbuckle",
+                  "email": "arbuckle@example.com"
+                }]
+              }
+            }|]
+
+    Right tables <- getEnrichedTables conn
+    schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+    Right result <- graphql schema Nothing mempty query
+
+    Ae.encode result `shouldBe` expected

@@ -231,7 +231,11 @@ mutationResponseType accessMode table = do
       ]
         <> readonlyFields
     )
-    & Type.withDescription ("Mutation response for " <> table.name)
+    & Type.withDescription
+      ( "Mutation response for table \""
+          <> table.name
+          <> "\""
+      )
 
 
 mutationByPkResponseType :: AccessMode -> TableEntry -> Type.IntrospectionType
@@ -250,7 +254,11 @@ mutationByPkResponseType accessMode table = do
       ]
         <> readonlyFields
     )
-    & Type.withDescription ("Mutation response for " <> table.name)
+    & Type.withDescription
+      ( "Response for a PK-based mutation on table \""
+          <> table.name
+          <> "\""
+      )
 
 
 tableInsertField :: AccessMode -> TableEntry -> Type.Field
@@ -388,7 +396,7 @@ tableUpdateFieldByPk accessMode tables table = do
       )
       (Type.nonNull $ mutationByPkResponseType accessMode table)
       & Type.fieldWithDescription
-        ("Update row in table \"" <> table.name <> "\"")
+        ("Update row in table \"" <> table.name <> "\" by PK")
       & Type.withArguments arguments
 
 
@@ -423,7 +431,7 @@ tableDeleteFieldByPK accessMode tables table = do
       )
       (Type.nonNull $ mutationByPkResponseType accessMode table)
       & Type.fieldWithDescription
-        ("Delete row in table \"" <> table.name <> "\"")
+        ("Delete row in table \"" <> table.name <> "\" by PK")
       & Type.withArguments args
 
 

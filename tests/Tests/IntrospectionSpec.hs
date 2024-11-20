@@ -240,8 +240,19 @@ main = void $ do
                         ]
                       },
                       {
+                        "name": "update_users_by_pk",
+                        "args": [
+                          { "name": "email" },
+                          { "name": "set" }
+                        ]
+                      },
+                      {
                         "name": "delete_users",
                         "args": [ { "name": "filter" } ]
+                      },
+                      {
+                        "name": "delete_users_by_pk",
+                        "args": [ { "name": "email" } ]
                       },
                       {
                         "name": "insert_songs",
@@ -255,8 +266,19 @@ main = void $ do
                         ]
                       },
                       {
+                        "name": "update_songs_by_pk",
+                        "args": [
+                          { "name": "rowid" },
+                          { "name": "set" }
+                        ]
+                      },
+                      {
                         "name": "delete_songs",
                         "args": [ { "name": "filter" } ]
+                      },
+                      {
+                        "name": "delete_songs_by_pk",
+                        "args": [ { "name": "rowid" } ]
                       }
                     ]
                   }
@@ -334,7 +356,11 @@ main = void $ do
                     { "name": "delete_users" },
                     { "name": "insert_songs" },
                     { "name": "update_songs" },
-                    { "name": "delete_songs" }
+                    { "name": "delete_songs" },
+                    { "name": "update_users_by_pk" },
+                    { "name": "delete_users_by_pk" },
+                    { "name": "update_songs_by_pk" },
+                    { "name": "delete_songs_by_pk" }
                   ]
                 }
               }
@@ -408,6 +434,7 @@ main = void $ do
                 "types": [
                   { "kind": "OBJECT", "name": "users_row" },
                   { "kind": "OBJECT", "name": "users_mutation_response" },
+                  { "kind": "OBJECT", "name": "users_mutation_by_pk_response" },
                   { "kind": "INPUT_OBJECT", "name": "users_insert_input" },
                   { "kind": "ENUM", "name": "users_column" },
                   { "kind": "INPUT_OBJECT", "name": "users_upsert_on_conflict" },
@@ -417,6 +444,7 @@ main = void $ do
 
                   { "kind": "OBJECT", "name": "songs_row" },
                   { "kind": "OBJECT", "name": "songs_mutation_response" },
+                  { "kind": "OBJECT", "name": "songs_mutation_by_pk_response" },
                   { "kind": "INPUT_OBJECT", "name": "songs_insert_input" },
                   { "kind": "ENUM", "name": "songs_column" },
                   { "kind": "INPUT_OBJECT", "name": "songs_upsert_on_conflict" },
@@ -596,6 +624,13 @@ main = void $ do
     schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
 
     Right result <- graphql schema Nothing mempty introspectionQuery
+
+    -- Uncomment to write the new file to disk (for easier diffing)
+    -- writeFile (testRoot </> "new_introspection_result.json") $
+    --   decodeUtf8 $
+    --     BL.toStrict $
+    --       Ae.encode result
+
     result `unorderedShouldBe` expected
 
   it "doesn't allow writeonly tokens to return data" $ do

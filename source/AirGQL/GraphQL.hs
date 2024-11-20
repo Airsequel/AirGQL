@@ -902,7 +902,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                     "Column "
                       <> T.unpack column
                       <> " cannot be set on conflicts without \
-                         \ being explicitly provided"
+                         \being explicitly provided"
 
               pure $
                 quoteKeyword column
