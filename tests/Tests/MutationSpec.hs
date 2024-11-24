@@ -410,7 +410,7 @@ main = void $ do
       allUsers `shouldBe` [[SQLText "Best Song", SQLInteger 125]]
 
     it "returns error on foreign key constraint violation" $ do
-      withTestDbConn (testRoot </> "foreign_key_constraint.db") $
+      withTestDbConn "foreign-key-constraint.db" $
         \conn -> do
           SS.execute_
             conn
@@ -475,7 +475,7 @@ main = void $ do
           Ae.encode result `shouldBe` expected
 
     it "correctly converts between GraphQL and SQLite floats" $ do
-      conn <- SS.open (testRoot </> "float-test.db")
+      conn <- SS.open $ testRoot </> "float-test.db"
       SS.execute_
         conn
         [sql|
@@ -957,6 +957,53 @@ main = void $ do
                      ]
                    ]
 
+    it "supports updating data by pk" $ do
+      conn <- SS.open dbPath
+      SS.execute_
+        conn
+        [sql|
+          insert into users (name, email, created_utc)
+          values
+            ('John', 'john@update-test.com', '2021-01-01T00:00Z'),
+            ('Eve', 'eve@update-test.com', '2021-01-02T00:00Z')
+        |]
+
+      let
+        query =
+          [gql|
+            mutation UpdateUsers {
+              update_users_by_pk(
+                email: "eve@update-test.com",
+                set: { name: "New Name" }
+              ) {
+                affected_rows
+                returning {
+                  rowid
+                  name
+                }
+              }
+            }
+          |]
+
+        expected =
+          [raw|{
+            "data": {
+              "update_users_by_pk": {
+                "affected_rows": 1,
+                "returning": {
+                  "rowid": 2,
+                  "name": "New Name"
+                }
+              }
+            }
+          }|]
+
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+      Right result <- graphql schema Nothing mempty query
+
+      result `unorderedShouldBe` expected
+
   describe "delete" $ do
     it "supports deleting data and returning the deleted data" $ do
       conn <- SS.open dbPath
@@ -1106,3 +1153,51 @@ main = void $ do
                      , SQLNull
                      ]
                    ]
+
+    it "supports deleting data by pk" $ do
+      conn <- SS.open dbPath
+      SS.execute_
+        conn
+        [sql|
+          insert into users (name, email, created_utc)
+          values
+            ('John', 'john@del-test.com', '2021-01-01T00:00Z'),
+            ('Eve', 'eve@del-test.com', '2021-01-02T00:00Z')
+        |]
+
+      let
+        query =
+          [gql|
+            mutation DeleteUsers {
+              delete_users_by_pk(
+                email: "eve@del-test.com"
+              ) {
+                affected_rows
+                returning {
+                  rowid
+                  name
+                }
+              }
+            }
+          |]
+
+        expected =
+          [raw|
+            {
+              "data": {
+                "delete_users_by_pk": {
+                  "affected_rows": 1,
+                  "returning": {
+                    "rowid": 2,
+                    "name": "Eve"
+                  }
+                }
+              }
+            }
+          |]
+
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+      Right result <- graphql schema Nothing mempty query
+
+      result `unorderedShouldBe` expected

@@ -59,7 +59,7 @@ main = void $ do
       |]
 
   it "supports retrieving data from tables with special names" $ do
-    let testDbPath = testRoot </> "special_table_name.db"
+    let testDbPath = testRoot </> "special-table-name.db"
     removeIfExists testDbPath
     let dbPathNorm = if shouldSaveDbs then testDbPath else ":memory:"
 

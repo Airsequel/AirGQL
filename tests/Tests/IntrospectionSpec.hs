@@ -679,3 +679,113 @@ main = void $ do
       graphql schema Nothing mempty query
 
     Ae.encode response `shouldBe` expected
+
+  describe "Naming conflicts" $ do
+    it "appends _ at the end of queries to avoid conflicts with table names" $ do
+      let dbName = "by-pk-table-names.db"
+      withTestDbConn dbName $ \conn -> do
+        SS.execute_ conn [sql| CREATE TABLE foo (id INT) |]
+        SS.execute_ conn [sql| CREATE TABLE foo_by_pk (id INT) |]
+        SS.execute_ conn [sql| CREATE TABLE foo_by_pk_ (id INT) |]
+
+        let
+          introspectionQuery =
+            [gql|
+              query {
+                __schema {
+                  queryType { fields { name } }
+                }
+              }
+            |]
+
+          expected =
+            [raw|
+              {
+                "data": {
+                  "__schema": {
+                    "queryType": {
+                      "fields": [
+                        { "name": "foo" },
+                        { "name": "foo_by_pk" },
+                        { "name": "foo_by_pk_" },
+                        { "name": "foo_by_pk__" },
+                        { "name": "foo_by_pk_by_pk" },
+                        { "name": "foo_by_pk__by_pk" }
+                      ]
+                    }
+                  }
+                }
+              }
+            |]
+
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+
+        Right result <- graphql schema Nothing mempty introspectionQuery
+
+        result `unorderedShouldBe` expected
+
+    it "appends _ at the end of argument names to avoid conflicts" $ do
+      let dbName = "by-pk-arg-names.db"
+      withTestDbConn dbName $ \conn -> do
+        SS.execute_ conn [sql| CREATE TABLE foo ("set" INT PRIMARY KEY) |]
+
+        let
+          introspectionQuery =
+            [gql|
+              query {
+                __schema {
+                  mutationType { fields { name, args { name } } }
+                }
+              }
+            |]
+
+          expected =
+            [raw|
+              {
+                "data": {
+                  "__schema": {
+                    "mutationType": {
+                      "fields": [
+                        { 
+                          "name": "insert_foo",
+                          "args": [
+                            { "name": "objects" },
+                            { "name": "on_conflict" }
+                          ]
+                        },
+                        { 
+                          "name": "update_foo",
+                          "args": [
+                            { "name": "set" },
+                            { "name": "filter" }
+                          ]
+                        },
+                        { 
+                          "name": "update_foo_by_pk",
+                          "args": [
+                            { "name": "set" },
+                            { "name": "set_" }
+                          ]
+                        },
+                        { 
+                          "name": "delete_foo",
+                          "args": [{ "name": "filter" }]
+                        },
+                        { 
+                          "name": "delete_foo_by_pk",
+                          "args": [{ "name": "set" }]
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            |]
+
+        Right tables <- getEnrichedTables conn
+        schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+
+        Right result <- graphql schema Nothing mempty introspectionQuery
+
+        result `unorderedShouldBe` expected
