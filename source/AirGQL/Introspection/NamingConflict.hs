@@ -1,11 +1,11 @@
-{-| Each table, say `foo`, generates a `foo` and a `foo_by_pk`. If a table
-named `foo_by_pk` also exists, this would create a naming conflict. This
-issue also occurs in a few other places.
+{-| Each table, say `foo`, generates a `foo` and a `foo_by_pk` query. If a
+table named `foo_by_pk` exists, this introduces a naming conflict.
+This issue also occurs in a few other places (like argument naming).
 
-To solve this, we implement the `encodeOutsideList` function, which encodes a name
-such that it does not conflict with any other name from a given list. This
-is done by repeatedly appending _ at the end, until the name does not reside in
-the given list anymore.
+To solve this, we implement the `encodeOutsideList` function, which encodes a
+name such that it does not conflict with any other name inside a given list.
+This is done by repeatedly appending _ to the name until it does not reside
+inside the given list anymore.
 -}
 module AirGQL.Introspection.NamingConflict (
   encodeOutsideList,
