@@ -50,15 +50,14 @@ dbPath :: FilePath
 dbPath = testRoot </> "fixture.db"
 
 
--- Although airsequel tries its best to be separate from Airsequel proper,
--- it looks like a bunch of functions still take database ids as arguments,
--- even though this concept doesn't exist in airgql. Example usages include:
--- - including the ID in error messages
--- - generating an url where the user can access a file when it's cell needs
---   to be converted to graphql
+-- AirGQL is supposed to be separate from Airsequel,
+-- but some functions still take database IDs as arguments.
+-- Example usages include:
+-- - Including the ID in error messages
+-- - Generating a URL where the user can access a file when it's cell needs
+--     to be converted to GraphQL
 --
--- I don't think any of the usages matter when testing,
--- so we use a dummy id instead.
+-- Those usages don't matter when testing, so we use a dummy ID instead.
 fixtureDbId :: Text
 fixtureDbId = "fixtures-db"
 
