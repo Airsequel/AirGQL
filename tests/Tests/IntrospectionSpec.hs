@@ -24,7 +24,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import AirGQL.GraphQL (getDerivedSchema)
-import AirGQL.Lib (getEnrichedTables, writeOnly)
+import AirGQL.Lib (getEnrichedTables, insertOnly, writeOnly)
 import AirGQL.Raw (raw)
 import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
 import AirGQL.Utils (withRetryConn)
@@ -181,7 +181,7 @@ main = void $ do
                 "data": null,
                 "errors": [{
                   "locations": [{ "column":3, "line":2 }],
-                  "message": "user error (Cannot read field using writeonly access code)",
+                  "message": "user error (Cannot read field using the provided token)",
                   "path": ["__schema"]
                 }]
               }
@@ -644,41 +644,88 @@ main = void $ do
           )
         |]
 
-    let
-      query :: Text
-      query =
-        [gql|
-          mutation items {
-            update_items(filter: { id: { eq: 0 }}, set: { id: 0 }) {
-              returning { id }
-            }
-          }
-        |]
-
-      expected =
-        rmSpaces
-          [raw|
-            {
-              "data": null,
-              "errors": [{
-                "locations": [{ "column":3, "line":2 }],
-                "message": "Cannot query field \"update_items\" on type \"Mutation\"."
-              }]
+      let
+        query :: Text
+        query =
+          [gql|
+            mutation items {
+              update_items(filter: { id: { eq: 0 }}, set: { id: 0 }) {
+                returning { id }
+              }
             }
           |]
 
-    schema <- withRetryConn dbPath $ \conn -> do
+        expected =
+          rmSpaces
+            [raw|
+              {
+                "data": null,
+                "errors": [{
+                  "locations": [{ "column":5, "line":3 }],
+                  "message": "Cannot query field \"returning\" on type \"items_mutation_response\"."
+                }]
+              }
+            |]
+
       Right tables <- getEnrichedTables conn
-      getDerivedSchema
-        defaultSchemaConf{accessMode = writeOnly}
+      schema <-
+        getDerivedSchema
+          defaultSchemaConf{accessMode = writeOnly}
+          conn
+          fixtureDbId
+          tables
+
+      Right response <-
+        graphql schema Nothing mempty query
+
+      Ae.encode response `shouldBe` expected
+
+  it "doesn't allow insertonly tokens to update data" $ do
+    let dbName = "no-insertonly-return.db"
+    withTestDbConn dbName $ \conn -> do
+      SS.execute_
         conn
-        fixtureDbId
-        tables
+        [sql|
+          CREATE TABLE items (
+            id INTEGER PRIMARY KEY
+          )
+        |]
 
-    Right response <-
-      graphql schema Nothing mempty query
+      let
+        query :: Text
+        query =
+          [gql|
+            mutation items {
+              update_items_by_pk(id: 0, set: { id: 0 }) {
+                affected_rows
+              }
+            }
+          |]
 
-    Ae.encode response `shouldBe` expected
+        expected =
+          rmSpaces
+            [raw|
+              {
+                "data": null,
+                "errors": [{
+                  "locations": [{ "column":3, "line":2 }],
+                  "message": "Cannot query field \"update_items_by_pk\" on type \"Mutation\"."
+                }]
+              }
+            |]
+
+      Right tables <- getEnrichedTables conn
+      schema <-
+        getDerivedSchema
+          defaultSchemaConf{accessMode = insertOnly}
+          conn
+          fixtureDbId
+          tables
+
+      Right response <-
+        graphql schema Nothing mempty query
+
+      Ae.encode response `shouldBe` expected
 
   describe "Naming conflicts" $ do
     it "appends _ at the end of queries to avoid conflicts with table names" $ do
@@ -747,32 +794,32 @@ main = void $ do
                   "__schema": {
                     "mutationType": {
                       "fields": [
-                        { 
+                        {
                           "name": "insert_foo",
                           "args": [
                             { "name": "objects" },
                             { "name": "on_conflict" }
                           ]
                         },
-                        { 
+                        {
                           "name": "update_foo",
                           "args": [
                             { "name": "set" },
                             { "name": "filter" }
                           ]
                         },
-                        { 
+                        {
                           "name": "update_foo_by_pk",
                           "args": [
                             { "name": "set" },
                             { "name": "set_" }
                           ]
                         },
-                        { 
+                        {
                           "name": "delete_foo",
                           "args": [{ "name": "filter" }]
                         },
-                        { 
+                        {
                           "name": "delete_foo_by_pk",
                           "args": [{ "name": "set" }]
                         }

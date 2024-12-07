@@ -36,7 +36,6 @@ import Protolude (
   (&),
   (&&),
   (.),
-  (<$>),
   (<&>),
   (<=),
   (>),
@@ -814,6 +813,9 @@ queryType connection accessMode dbId tables = do
               , Introspection.typeNameResolver
               , resolvers
               ]
+              -- TODO: is it better to wrap the resolvers here,
+              -- or to just return an empty list of resolvers
+              -- when given a token that cannot read?
               <&> wrapResolver requireRead
         }
 
@@ -1074,94 +1076,73 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
         numOfChanges <- SS.changes connection
         mutationByPKResponse table numOfChanges $ P.head deletedRows
 
-    getMutationResolvers :: IO (HashMap.HashMap Text (Resolver IO))
-    getMutationResolvers = do
-      let
-        getInsertTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getInsertTableTuple table =
-          makeResolver
-            (Introspection.tableInsertField accessMode table)
-            (executeDbInserts table)
+    getInsertTableTuple :: TableEntry -> IO (Text, Resolver IO)
+    getInsertTableTuple table =
+      makeResolver
+        (Introspection.tableInsertField accessMode table)
+        (executeDbInserts table)
 
-        getUpdateTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getUpdateTableTuple table =
-          makeResolver
-            (Introspection.tableUpdateField accessMode table)
-            (executeDbUpdates table)
+    getUpdateTableTuple :: TableEntry -> IO (Text, Resolver IO)
+    getUpdateTableTuple table =
+      makeResolver
+        (Introspection.tableUpdateField accessMode table)
+        (executeDbUpdates table)
 
-        getUpdateByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
-        getUpdateByPKTableTuple table =
-          P.for (Introspection.tableUpdateFieldByPk accessMode tables table) $
-            \field -> makeResolver field (executeDbUpdatesByPK table)
+    getUpdateByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+    getUpdateByPKTableTuple table =
+      P.for (Introspection.tableUpdateFieldByPk accessMode tables table) $
+        \field -> makeResolver field (executeDbUpdatesByPK table)
 
-        getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
-        getDeleteTableTuple table =
-          makeResolver
-            (Introspection.tableDeleteField accessMode table)
-            (executeDbDeletions table)
+    getDeleteTableTuple :: TableEntry -> IO (Text, Resolver IO)
+    getDeleteTableTuple table =
+      makeResolver
+        (Introspection.tableDeleteField accessMode table)
+        (executeDbDeletions table)
 
-        getDeleteByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
-        getDeleteByPKTableTuple table =
-          P.for (Introspection.tableDeleteFieldByPK accessMode tables table) $
-            \field -> makeResolver field (executeDbDeletionsByPK table)
+    getDeleteByPKTableTuple :: TableEntry -> IO (Maybe (Text, Resolver IO))
+    getDeleteByPKTableTuple table =
+      P.for (Introspection.tableDeleteFieldByPK accessMode tables table) $
+        \field -> makeResolver field (executeDbDeletionsByPK table)
 
-        tablesWithoutViews :: [TableEntry]
-        tablesWithoutViews =
-          List.filter
-            (\table -> table.object_type == Table)
-            tables
+    tablesWithoutViews :: [TableEntry]
+    tablesWithoutViews =
+      List.filter
+        (\table -> table.object_type == Table)
+        tables
 
-      insertTuples <-
-        P.fold
-          [ P.for tablesWithoutViews getInsertTableTuple
-          ]
+  insertTuples <-
+    P.fold
+      [ P.for tablesWithoutViews getInsertTableTuple
+      ]
 
-      writeTuples <-
-        P.fold
-          [ P.for tablesWithoutViews getUpdateTableTuple
-          , P.for tablesWithoutViews getDeleteTableTuple
-          , P.for tablesWithoutViews getUpdateByPKTableTuple
-              <&> P.catMaybes
-          , P.for tablesWithoutViews getDeleteByPKTableTuple
-              <&> P.catMaybes
-          ]
+  writeTuples <-
+    P.fold
+      [ P.for tablesWithoutViews getUpdateTableTuple
+      , P.for tablesWithoutViews getDeleteTableTuple
+      , P.for tablesWithoutViews getUpdateByPKTableTuple
+          <&> P.catMaybes
+      , P.for tablesWithoutViews getDeleteByPKTableTuple
+          <&> P.catMaybes
+      ]
 
-      let
-        requireWrite :: Out.Resolve IO -> Out.Resolve IO
-        requireWrite resolve = do
-          when (P.not $ canWrite accessMode) $ do
-            throw $
-              ResolverException $
-                userError "Cannot write field using the provided token"
-          resolve
+  let
+    insertResolvers =
+      if canInsert accessMode
+        then HashMap.fromList insertTuples
+        else mempty
 
-        requireInsert :: Out.Resolve IO -> Out.Resolve IO
-        requireInsert resolve = do
-          when (P.not $ canInsert accessMode) $ do
-            throw $
-              ResolverException $
-                userError "Cannot insert entries using the provided token"
-          resolve
+    writeResolvers =
+      if canWrite accessMode
+        then HashMap.fromList writeTuples
+        else mempty
 
-        insertResolvers =
-          HashMap.fromList insertTuples
-            <&> wrapResolver requireInsert
-
-        writeResolvers =
-          HashMap.fromList writeTuples
-            <&> wrapResolver requireWrite
-
-      pure $ insertResolvers <> writeResolvers
-
-  if canWrite accessMode
-    then
-      Just
-        . Out.ObjectType
-          "Mutation"
-          Nothing
-          []
-        <$> getMutationResolvers
-    else pure Nothing
+  pure
+    $ Just
+    $ Out.ObjectType
+      "Mutation"
+      Nothing
+      []
+    $ insertResolvers <> writeResolvers
 
 
 -- | Automatically generated schema derived from the SQLite database

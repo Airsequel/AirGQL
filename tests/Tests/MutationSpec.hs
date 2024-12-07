@@ -24,11 +24,11 @@ import System.FilePath ((</>))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import AirGQL.GraphQL (getDerivedSchema)
-import AirGQL.Lib (SQLPost (SQLPost, query), getEnrichedTables)
+import AirGQL.Lib (SQLPost (SQLPost, query), getEnrichedTables, insertOnly)
 import AirGQL.Raw (raw)
 import AirGQL.Servant.SqlQuery (sqlQueryPostHandler)
 import AirGQL.Types.PragmaConf qualified as PragmaConf
-import AirGQL.Types.SchemaConf (defaultSchemaConf)
+import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
 import AirGQL.Types.SqlQueryPostResult (
   SqlQueryPostResult (rows),
  )
@@ -75,7 +75,12 @@ main = void $ do
 
       conn <- SS.open dbPath
       Right tables <- getEnrichedTables conn
-      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+      schema <-
+        getDerivedSchema
+          defaultSchemaConf{accessMode = insertOnly}
+          conn
+          fixtureDbId
+          tables
       Right result <- graphql schema Nothing mempty query
 
       Ae.encode result `shouldBe` expected
