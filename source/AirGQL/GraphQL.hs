@@ -86,7 +86,7 @@ import AirGQL.Introspection.NamingConflict (encodeOutsidePKNames)
 import AirGQL.Introspection.Resolver qualified as Introspection
 import AirGQL.Introspection.Types qualified as Introspection
 import AirGQL.Lib (
-  AccessMode,
+  AccessMode (canInsert),
   ColumnEntry (column_name, datatype),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
@@ -597,6 +597,18 @@ makeResolver field resolve = do
         )
 
 
+-- | Maps the inner computation held by a resolver
+wrapResolver
+  :: (Out.Resolve IO -> Out.Resolve IO)
+  -> Out.Resolver IO
+  -> Out.Resolver IO
+wrapResolver f = \case
+  ValueResolver field resolve ->
+    ValueResolver field (f resolve)
+  EventStreamResolver field resolve subscribe ->
+    EventStreamResolver field (f resolve) subscribe
+
+
 queryType
   :: Connection
   -> AccessMode
@@ -782,19 +794,13 @@ queryType connection accessMode dbId tables = do
   schemaResolver <- Introspection.getSchemaResolver accessMode tables
 
   let
-    -- Resolve = ReaderT Context m Value
-    wrapResolve resolve = do
+    requireRead :: Out.Resolve IO -> Out.Resolve IO
+    requireRead resolve = do
       when (P.not $ canRead accessMode) $ do
         throw $
           ResolverException $
-            userError "Cannot read field using writeonly access code"
+            userError "Cannot read field using the provided token"
       resolve
-
-    protectResolver = \case
-      ValueResolver field resolve ->
-        ValueResolver field (wrapResolve resolve)
-      EventStreamResolver field resolve subscribe ->
-        EventStreamResolver field (wrapResolve resolve) subscribe
 
   pure $
     outObjectTypeToObjectType $
@@ -808,7 +814,7 @@ queryType connection accessMode dbId tables = do
               , Introspection.typeNameResolver
               , resolvers
               ]
-              <&> protectResolver
+              <&> wrapResolver requireRead
         }
 
 
@@ -1099,25 +1105,53 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
           P.for (Introspection.tableDeleteFieldByPK accessMode tables table) $
             \field -> makeResolver field (executeDbDeletionsByPK table)
 
-        getTableTuples :: IO [(Text, Resolver IO)]
-        getTableTuples =
-          let
-            tablesWithoutViews =
-              List.filter
-                (\table -> table.object_type == Table)
-                tables
-          in
-            P.fold
-              [ P.for tablesWithoutViews getInsertTableTuple
-              , P.for tablesWithoutViews getUpdateTableTuple
-              , P.for tablesWithoutViews getDeleteTableTuple
-              , P.for tablesWithoutViews getUpdateByPKTableTuple
-                  <&> P.catMaybes
-              , P.for tablesWithoutViews getDeleteByPKTableTuple
-                  <&> P.catMaybes
-              ]
+        tablesWithoutViews :: [TableEntry]
+        tablesWithoutViews =
+          List.filter
+            (\table -> table.object_type == Table)
+            tables
 
-      getTableTuples <&> HashMap.fromList
+      insertTuples <-
+        P.fold
+          [ P.for tablesWithoutViews getInsertTableTuple
+          ]
+
+      writeTuples <-
+        P.fold
+          [ P.for tablesWithoutViews getUpdateTableTuple
+          , P.for tablesWithoutViews getDeleteTableTuple
+          , P.for tablesWithoutViews getUpdateByPKTableTuple
+              <&> P.catMaybes
+          , P.for tablesWithoutViews getDeleteByPKTableTuple
+              <&> P.catMaybes
+          ]
+
+      let
+        requireWrite :: Out.Resolve IO -> Out.Resolve IO
+        requireWrite resolve = do
+          when (P.not $ canWrite accessMode) $ do
+            throw $
+              ResolverException $
+                userError "Cannot write field using the provided token"
+          resolve
+
+        requireInsert :: Out.Resolve IO -> Out.Resolve IO
+        requireInsert resolve = do
+          when (P.not $ canInsert accessMode) $ do
+            throw $
+              ResolverException $
+                userError "Cannot insert entries using the provided token"
+          resolve
+
+        insertResolvers =
+          HashMap.fromList insertTuples
+            <&> wrapResolver requireInsert
+
+        writeResolvers =
+          HashMap.fromList writeTuples
+            <&> wrapResolver requireWrite
+
+      pure $ insertResolvers <> writeResolvers
 
   if canWrite accessMode
     then

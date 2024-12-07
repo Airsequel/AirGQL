@@ -24,7 +24,7 @@ import System.FilePath ((</>))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 import AirGQL.GraphQL (getDerivedSchema)
-import AirGQL.Lib (AccessMode (WriteOnly), getEnrichedTables)
+import AirGQL.Lib (getEnrichedTables, writeOnly)
 import AirGQL.Raw (raw)
 import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
 import AirGQL.Utils (withRetryConn)
@@ -190,7 +190,7 @@ main = void $ do
       schema <- withRetryConn dbPath $ \conn -> do
         Right tables <- getEnrichedTables conn
         getDerivedSchema
-          defaultSchemaConf{accessMode = WriteOnly}
+          defaultSchemaConf{accessMode = writeOnly}
           conn
           fixtureDbId
           tables
@@ -670,7 +670,7 @@ main = void $ do
     schema <- withRetryConn dbPath $ \conn -> do
       Right tables <- getEnrichedTables conn
       getDerivedSchema
-        defaultSchemaConf{accessMode = WriteOnly}
+        defaultSchemaConf{accessMode = writeOnly}
         conn
         fixtureDbId
         tables

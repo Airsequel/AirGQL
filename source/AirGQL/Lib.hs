@@ -6,9 +6,11 @@
 {-# HLINT ignore "Use tuple-section" #-}
 
 module AirGQL.Lib (
-  AccessMode (..),
-  canRead,
-  canWrite,
+  AccessMode (canRead, canWrite, canInsert),
+  mkAccessMode,
+  readOnly,
+  writeOnly,
+  readAndWrite,
   ColumnEntry (..),
   GqlTypeName (..),
   getEnrichedTable,
@@ -117,18 +119,33 @@ import Language.SQL.SimpleSQL.Syntax qualified as SQL
 import Servant.Docs (ToSample (toSamples), singleSample)
 
 
-data AccessMode = ReadOnly | WriteOnly | ReadAndWrite
+data AccessMode = AccessMode
+  { canRead :: Bool
+  , canInsert :: Bool
+  , canWrite :: Bool
+  }
   deriving (Eq, Show)
 
 
-canRead :: AccessMode -> Bool
-canRead WriteOnly = False
-canRead _ = True
+mkAccessMode :: Bool -> Bool -> Bool -> AccessMode
+mkAccessMode read insert write =
+  AccessMode
+    { canRead = read
+    , canInsert = insert || write
+    , canWrite = write
+    }
 
 
-canWrite :: AccessMode -> Bool
-canWrite ReadOnly = False
-canWrite _ = True
+readOnly :: AccessMode
+readOnly = mkAccessMode True False False
+
+
+writeOnly :: AccessMode
+writeOnly = mkAccessMode False True True
+
+
+readAndWrite :: AccessMode
+readAndWrite = mkAccessMode True True True
 
 
 data ObjectType = Table | Index | View | Trigger

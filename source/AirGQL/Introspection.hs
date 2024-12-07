@@ -46,6 +46,7 @@ import AirGQL.Lib (
   GqlTypeName (full, root),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
+  canInsert,
   canRead,
   canWrite,
   column_name_gql,
@@ -464,33 +465,36 @@ getSchema
   -> Type.Schema
 getSchema accessMode tables = do
   let
-    queryType =
-      if canRead accessMode
-        then
-          P.fold
-            [ tables <&> tableQueryField
-            , tables & P.mapMaybe (tableQueryByPKField tables)
-            ]
-        else []
+    queryType = do
+      P.guard $ canRead accessMode
+      P.fold
+        [ tables <&> tableQueryField
+        , tables & P.mapMaybe (tableQueryByPKField tables)
+        ]
 
     tablesWithoutViews =
       List.filter
         (\table -> table.object_type == Table)
         tables
 
-    mutationType =
-      if canWrite accessMode
-        then
-          P.fold
-            [ tablesWithoutViews <&> tableInsertField accessMode
-            , tablesWithoutViews <&> tableUpdateField accessMode
-            , tablesWithoutViews <&> tableDeleteField accessMode
-            , tablesWithoutViews
-                & P.mapMaybe (tableUpdateFieldByPk accessMode tables)
-            , tablesWithoutViews
-                & P.mapMaybe (tableDeleteFieldByPK accessMode tables)
-            ]
-        else []
+    insertMutations = do
+      P.guard $ canInsert accessMode
+      P.fold
+        [ tablesWithoutViews <&> tableInsertField accessMode
+        ]
+
+    writeMutations = do
+      P.guard $ canWrite accessMode
+      P.fold
+        [ tablesWithoutViews <&> tableUpdateField accessMode
+        , tablesWithoutViews <&> tableDeleteField accessMode
+        , tablesWithoutViews
+            & P.mapMaybe (tableUpdateFieldByPk accessMode tables)
+        , tablesWithoutViews
+            & P.mapMaybe (tableDeleteFieldByPK accessMode tables)
+        ]
+
+    mutationType = insertMutations <> writeMutations
 
   Type.collectSchemaTypes $
     Type.Schema

@@ -3,9 +3,9 @@ module AirGQL.Types.SchemaConf (
   defaultSchemaConf,
 ) where
 
-import Protolude (Integer)
+import Protolude (Bool (True), Integer)
 
-import AirGQL.Lib (AccessMode (ReadAndWrite))
+import AirGQL.Lib (AccessMode, mkAccessMode)
 import AirGQL.Types.PragmaConf (PragmaConf, defaultConf)
 
 
@@ -20,7 +20,7 @@ data SchemaConf = SchemaConf
 defaultSchemaConf :: SchemaConf
 defaultSchemaConf =
   SchemaConf
-    { accessMode = ReadAndWrite
+    { accessMode = mkAccessMode True True True
     , pragmaConf = AirGQL.Types.PragmaConf.defaultConf
     , maxRowsPerTable = 100_000
     }

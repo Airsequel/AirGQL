@@ -26,10 +26,11 @@ import Servant.Server qualified as Servant
 import System.Directory (makeAbsolute)
 
 import AirGQL.Lib (
-  AccessMode (ReadOnly, WriteOnly),
   column_name,
   getColumns,
   getTableNames,
+  readOnly,
+  writeOnly,
  )
 import AirGQL.ServerUtils (executeQuery)
 import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
@@ -98,7 +99,7 @@ readOnlyGqlPostHandler dbIdOrPath gqlPost =
     reqDir <- makeAbsolute $ getReadOnlyFilePath dbIdOrPath
 
     executeQuery
-      defaultSchemaConf{accessMode = ReadOnly}
+      defaultSchemaConf{accessMode = readOnly}
       dbIdOrPath
       reqDir
       gqlPost.query
@@ -112,7 +113,7 @@ writeOnlyGqlPostHandler dbPath gqlPost =
     reqDir <- makeAbsolute $ getReadOnlyFilePath dbPath
 
     executeQuery
-      defaultSchemaConf{accessMode = WriteOnly}
+      defaultSchemaConf{accessMode = writeOnly}
       dbPath
       reqDir
       gqlPost.query
