@@ -10,6 +10,7 @@ module AirGQL.Lib (
   mkAccessMode,
   readOnly,
   writeOnly,
+  insertOnly,
   readAndWrite,
   ColumnEntry (..),
   GqlTypeName (..),
@@ -142,6 +143,10 @@ readOnly = mkAccessMode True False False
 
 writeOnly :: AccessMode
 writeOnly = mkAccessMode False True True
+
+
+insertOnly :: AccessMode
+insertOnly = mkAccessMode False True False
 
 
 readAndWrite :: AccessMode

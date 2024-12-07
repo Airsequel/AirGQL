@@ -56,7 +56,7 @@ import Text.Blaze.Internal (MarkupM)
 
 import AirGQL.Config (Config (maxDbSize), defaultConfig)
 import AirGQL.ExternalAppContext (ExternalAppContext)
-import AirGQL.Lib (SQLPost)
+import AirGQL.Lib (SQLPost, insertOnly, readOnly, writeOnly)
 import AirGQL.Servant.Database (
   apiDatabaseSchemaGetHandler,
   apiDatabaseVacuumPostHandler,
@@ -65,11 +65,9 @@ import AirGQL.Servant.GraphQL (
   gqlQueryGetHandler,
   gqlQueryPostHandler,
   playgroundDefaultQueryHandler,
-  readOnlyGqlPostHandler,
-  writeOnlyGqlPostHandler,
  )
 import AirGQL.Servant.SqlQuery (sqlQueryPostHandler)
-import AirGQL.Types.SchemaConf (SchemaConf (pragmaConf), defaultSchemaConf)
+import AirGQL.Types.SchemaConf (SchemaConf (accessMode, pragmaConf), defaultSchemaConf)
 import AirGQL.Types.SqlQueryPostResult (SqlQueryPostResult)
 import AirGQL.Types.Types (GQLPost)
 
@@ -86,13 +84,15 @@ type PlatformAPI =
       :> ReqBody '[JSON] GQLPost
       :> Post '[JSON] Object
 
-  -- writeOnlyGqlPostHandler
   :<|> "readonly" :> "graphql"
           :> ReqBody '[JSON] GQLPost
           :> Post '[JSON] Object
 
-  -- writeOnlyGqlPostHandler
   :<|> "writeonly" :> "graphql"
+          :> ReqBody '[JSON] GQLPost
+          :> Post '[JSON] Object
+  
+  :<|> "insertonly" :> "graphql"
           :> ReqBody '[JSON] GQLPost
           :> Post '[JSON] Object
 
@@ -164,8 +164,9 @@ platformServer ctx filePath = do
   let dbPath = T.pack filePath
   gqlQueryGetHandler dbPath
     :<|> gqlQueryPostHandler defaultSchemaConf dbPath
-    :<|> readOnlyGqlPostHandler dbPath
-    :<|> writeOnlyGqlPostHandler dbPath
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = readOnly} dbPath
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = writeOnly} dbPath
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = insertOnly} dbPath
     :<|> playgroundDefaultQueryHandler dbPath
     :<|> apiDatabaseSchemaGetHandler ctx dbPath
     :<|> apiDatabaseVacuumPostHandler dbPath

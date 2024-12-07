@@ -2,8 +2,6 @@ module AirGQL.Servant.GraphQL (
   gqlQueryGetHandler,
   gqlQueryPostHandler,
   playgroundDefaultQueryHandler,
-  readOnlyGqlPostHandler,
-  writeOnlyGqlPostHandler,
 ) where
 
 import Protolude (
@@ -29,16 +27,13 @@ import AirGQL.Lib (
   column_name,
   getColumns,
   getTableNames,
-  readOnly,
-  writeOnly,
  )
 import AirGQL.ServerUtils (executeQuery)
-import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
+import AirGQL.Types.SchemaConf (SchemaConf)
 import AirGQL.Types.Types (GQLPost (operationName, query, variables))
 import AirGQL.Utils (
   getDbDir,
   getMainDbPath,
-  getReadOnlyFilePath,
   throwErr400WithMsg,
   throwErr404WithMsg,
   withRetryConn,
@@ -91,34 +86,6 @@ gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
           gqlPost.operationName
     )
     handleNoDbError
-
-
-readOnlyGqlPostHandler :: Text -> GQLPost -> Servant.Handler Object
-readOnlyGqlPostHandler dbIdOrPath gqlPost =
-  liftIO $ do
-    reqDir <- makeAbsolute $ getReadOnlyFilePath dbIdOrPath
-
-    executeQuery
-      defaultSchemaConf{accessMode = readOnly}
-      dbIdOrPath
-      reqDir
-      gqlPost.query
-      (gqlPost.variables & P.fromMaybe mempty)
-      gqlPost.operationName
-
-
-writeOnlyGqlPostHandler :: Text -> GQLPost -> Servant.Handler Object
-writeOnlyGqlPostHandler dbPath gqlPost =
-  liftIO $ do
-    reqDir <- makeAbsolute $ getReadOnlyFilePath dbPath
-
-    executeQuery
-      defaultSchemaConf{accessMode = writeOnly}
-      dbPath
-      reqDir
-      gqlPost.query
-      (gqlPost.variables & P.fromMaybe mempty)
-      gqlPost.operationName
 
 
 playgroundDefaultQueryHandler
