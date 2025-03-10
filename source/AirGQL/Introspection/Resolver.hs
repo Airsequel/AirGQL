@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Replace case with maybe" #-}
 module AirGQL.Introspection.Resolver (
   makeType,
   makeConstField,
@@ -8,9 +11,9 @@ import Protolude (
   Either (Left),
   IO,
   Int,
+  Maybe (Just, Nothing),
   MonadReader (ask),
   Text,
-  fromMaybe,
   pure,
   show,
   ($),
@@ -23,13 +26,25 @@ import Protolude (
 import Protolude qualified as P
 
 import AirGQL.Introspection.Types qualified as IType
+import Control.Exception qualified as Exception
 import Data.HashMap.Strict qualified as HashMap
+import Data.Text qualified as T
+import GHC.IO.Exception (userError)
+import Language.GraphQL.Error (ResolverException (ResolverException))
 import Language.GraphQL.Type qualified as Type
 import Language.GraphQL.Type.In qualified as In
 import Language.GraphQL.Type.Out qualified as Out
 
 
 type Result = Either Text
+
+
+throwResolverError :: Text -> m a
+throwResolverError err =
+  Exception.throw $
+    ResolverException $
+      userError $
+        T.unpack err
 
 
 {-| Turns a type descriptor into a graphql output type, erroring out on input
@@ -123,18 +138,23 @@ makeType =
         let defaultValue =
               if Out.isNonNullType ty
                 then
-                  Type.String $
+                  throwResolverError $
                     "Error: field '"
                       <> field.name
                       <> "' not found "
-                else Type.Null
+                else pure Type.Null
 
         case context.values of
-          Type.Object obj ->
-            pure $
-              fromMaybe defaultValue $
-                HashMap.lookup field.name obj
-          _ -> pure defaultValue
+          Type.Object obj -> do
+            let errorValue = HashMap.lookup ("__error_" <> field.name) obj
+            P.for_ errorValue $ \case
+              Type.String err -> throwResolverError err
+              _ -> pure ()
+
+            case HashMap.lookup field.name obj of
+              Just value -> pure value
+              Nothing -> defaultValue
+          _ -> defaultValue
   in
     makeTypeWithDepth 0
 

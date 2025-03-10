@@ -102,8 +102,7 @@ import AirGQL.Types.SchemaConf (
   SchemaConf (accessMode, maxRowsPerTable, pragmaConf),
  )
 import AirGQL.Types.Utils (encodeToText)
-import AirGQL.Utils (colToFileUrl, collectErrorList, quoteKeyword, quoteText)
-import Data.Either.Extra qualified as Either
+import AirGQL.Utils (colToFileUrl, quoteKeyword, quoteText)
 import Data.List qualified as List
 import Language.GraphQL.Class (FromGraphQL (fromGraphQL))
 
@@ -385,7 +384,19 @@ gqlValueToSQLData = \case
   Object obj -> SQLText $ show obj
 
 
-rowToGraphQL :: Text -> TableEntry -> [SQLData] -> Either [(Text, Text)] Value
+-- The way Airsequel works at the moment is by generating one big GQL object at
+-- the root-most resolver, and then having child resolvers pick up the sections
+-- they need.
+--
+-- One issue with this way of doing things is that we don't have a way to
+-- generate location-specific errors, thus we used to simply error out at the
+-- first issue, without returning partial results.
+--
+-- The "hack" I came up to fix this, is to return a failed field named "foo" as
+-- a field named "__error_foo" containing the text of the error. The child
+-- resolvers can later pick up this error, and fail themselves only, thus
+-- returning partial results.
+rowToGraphQL :: Text -> TableEntry -> [SQLData] -> Value
 rowToGraphQL dbId table row =
   let
     buildMetadataJson :: Text -> Text -> Text
@@ -393,80 +404,51 @@ rowToGraphQL dbId table row =
       object ["url" .= colToFileUrl dbId table.name colName rowid]
         & encodeToText
 
-    parseSqlData :: (ColumnEntry, SQLData) -> Either (Text, Text) (Text, Value)
+    parseSqlData :: (ColumnEntry, SQLData) -> (Text, Value)
     parseSqlData (colEntry, colVal) =
       if "BLOB" `T.isPrefixOf` colEntry.datatype
         then
-          pure
-            ( colEntry.column_name_gql
-            , case colVal of
-                SQLNull -> Null
-                SQLInteger id ->
-                  String $
-                    buildMetadataJson colEntry.column_name (show id)
-                SQLText id ->
-                  String $
-                    buildMetadataJson colEntry.column_name id
-                _ -> Null
-            )
+          ( colEntry.column_name_gql
+          , case colVal of
+              SQLNull -> Null
+              SQLInteger id ->
+                String $
+                  buildMetadataJson colEntry.column_name (show id)
+              SQLText id ->
+                String $
+                  buildMetadataJson colEntry.column_name id
+              _ -> Null
+          )
         else case sqlDataToGQLValue colEntry.datatype colVal of
           Left err ->
-            Left
-              (colEntry.column_name_gql, err)
+            ( "__error_" <> colEntry.column_name_gql
+            , String err
+            )
           Right gqlData ->
-            Right
-              ( colEntry.column_name_gql
-              , case colEntry.datatype of
-                  -- Coerce value to nullable String
-                  -- if no datatype is set.
-                  -- This happens for columns in views.
-                  "" -> gqlValueToNullableString gqlData
-                  _ -> gqlData
-              )
+            ( colEntry.column_name_gql
+            , case colEntry.datatype of
+                -- Coerce value to nullable String
+                -- if no datatype is set.
+                -- This happens for columns in views.
+                "" -> gqlValueToNullableString gqlData
+                _ -> gqlData
+            )
   in
     -- => [(ColumnEntry, SQLData)]
     P.zip table.columns row
-      -- => [Either (Text, Text) (Text, Value)]
+      -- => [(Text, Value)]
       <&> parseSqlData
-      -- => Either [(Text, Text)] (Text, Value)
-      & collectErrorList
-      -- => Either [(Text, Text)] (HashMap Text Value)
-      <&> HashMap.fromList
-      -- => Either [(Text, Text)] Value
-      <&> Object
+      -- => HashMap Text Value
+      & HashMap.fromList
+      -- => Value
+      & Object
 
 
-rowsToGraphQL
-  :: Text
-  -> TableEntry
-  -> [[SQLData]]
-  -> Either [(Text, Text)] Value
+rowsToGraphQL :: Text -> TableEntry -> [[SQLData]] -> Value
 rowsToGraphQL dbId table updatedRows =
   updatedRows
-    -- => [Either [(Text, Text)] Value]
     <&> rowToGraphQL dbId table
-    -- => Either [[(Text, Text)]] [Value]
-    & collectErrorList
-    -- => Either [(Text, Text)] [Value]
-    & Either.mapLeft P.join
-    -- => Either [(Text, Text)] Value
-    <&> List
-
-
--- | Formats errors from `row(s)ToGraphQL` and throws them.
-colErrorsToUserError :: forall m a. (MonadIO m) => Either [(Text, Text)] a -> m a
-colErrorsToUserError = \case
-  Right v -> pure v
-  Left errors ->
-    let
-      errorLines =
-        errors
-          <&> \(column, err) -> "On column " <> show column <> ": " <> err
-    in
-      P.throwIO $
-        userError $
-          T.unpack $
-            "Multiple errors occurred:\n" <> P.unlines errorLines
+    & List
 
 
 tryGetArg
@@ -742,7 +724,7 @@ queryType connection accessMode dbId tables = do
               orderElements
               paginationMb
 
-      colErrorsToUserError $ rowsToGraphQL dbId table rows
+      pure $ rowsToGraphQL dbId table rows
 
     getDbEntriesByPK :: TableEntry -> Out.Resolve IO
     getDbEntriesByPK tableEntry = do
@@ -764,7 +746,7 @@ queryType connection accessMode dbId tables = do
       case P.head queryResult of
         Nothing -> pure Null
         Just row ->
-          colErrorsToUserError $
+          pure $
             rowToGraphQL
               dbId
               tableEntry
@@ -835,9 +817,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
     mutationResponse :: TableEntry -> Int -> [[SQLData]] -> IO Value
     mutationResponse table numChanges rows = do
-      returning <-
-        colErrorsToUserError $
-          rowsToGraphQL dbId table rows
+      let returning = rowsToGraphQL dbId table rows
 
       pure $
         Object $
@@ -848,11 +828,9 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
     mutationByPKResponse :: TableEntry -> Int -> Maybe [SQLData] -> IO Value
     mutationByPKResponse table numChanges mbRow = do
-      returning <- case mbRow of
-        Nothing -> pure Null
-        Just row ->
-          colErrorsToUserError $
-            rowToGraphQL dbId table row
+      let returning = case mbRow of
+            Nothing -> Null
+            Just row -> rowToGraphQL dbId table row
 
       pure $
         Object $

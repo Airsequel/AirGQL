@@ -820,15 +820,28 @@ main = void $ do
             rmSpaces
               [raw|
                   {
-                    "data": null,
+                    "data": {
+                      "test": [{
+                        "alsobig": null,
+                        "big": null
+                      }]
+                    },
                     "errors": [{
                       "locations": [{
-                        "column": 3,
-                        "line": 2
+                        "column": 5,
+                        "line": 3
                       }],
                       "message":
-                        "user error (Multiple errors occurred:\nOn column \"big\": Integer 8000000000 would overflow. This happens because SQLite uses 64-bit ints, but GraphQL uses 32-bit ints. Use a Number (64-bit float) or Text column instead.\nOn column \"alsobig\": Integer 9000000000 would overflow. This happens because SQLite uses 64-bit ints, but GraphQL uses 32-bit ints. Use a Number (64-bit float) or Text column instead.\n)",
-                      "path": ["test"]
+                        "user error (Integer 8000000000 would overflow. This happens because SQLite uses 64-bit ints, but GraphQL uses 32-bit ints. Use a Number (64-bit float) or Text column instead.)",
+                      "path": ["test", 0, "big"]
+                    }, {
+                      "locations": [{
+                        "column": 5,
+                        "line": 4
+                      }],
+                      "message":
+                        "user error (Integer 9000000000 would overflow. This happens because SQLite uses 64-bit ints, but GraphQL uses 32-bit ints. Use a Number (64-bit float) or Text column instead.)",
+                      "path": ["test", 0, "alsobig"]
                     }]
                   }
                 |]
