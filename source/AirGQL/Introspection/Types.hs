@@ -16,9 +16,12 @@ module AirGQL.Introspection.Types (
   enumValueWithDescription,
   field,
   fieldWithDescription,
+  deprecatedField,
   inputObject,
   inputValue,
   inputValueWithDescription,
+  deprecatedInputValue,
+  renameInputValue,
   list,
   nonNull,
   object,
@@ -40,13 +43,15 @@ module AirGQL.Introspection.Types (
 import Protolude (
   Bool (False, True),
   Generic,
+  IO,
   Maybe (Just, Nothing),
+  MonadReader (ask),
   MonadState (get, put),
   Monoid (mempty),
-  Show,
   State,
   Text,
   execState,
+  filter,
   for_,
   not,
   pure,
@@ -54,8 +59,10 @@ import Protolude (
   when,
   ($),
   (&),
+  (/=),
   (<$>),
   (<>),
+  (==),
  )
 
 import Data.HashMap.Strict (HashMap)
@@ -71,7 +78,7 @@ data Schema = Schema
   , mutationType :: Maybe IntrospectionType
   , directives :: [Directive]
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 instance ToGraphQL Schema where
@@ -98,14 +105,14 @@ data TypeKind
   | InputObject Name [InputValue]
   | List IntrospectionType
   | NonNull IntrospectionType
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 data IntrospectionType = IType
   { kind :: TypeKind
   , description :: Maybe Text
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 instance ToGraphQL IntrospectionType where
@@ -214,8 +221,11 @@ data Field = Field
   , type_ :: IntrospectionType
   , isDeprecated :: Bool
   , deprecationReason :: Maybe Text
+  , -- Allows injecting custom logic into the resulting resolver. The function
+    -- is given the value of the field in the parent object.
+    customResolver :: Value.Value -> Value.Resolve IO
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 instance ToGraphQL Field where
@@ -231,14 +241,6 @@ instance ToGraphQL Field where
         ]
 
 
-fieldWithDescription :: Text -> Field -> Field
-fieldWithDescription newDesc (Field{..}) =
-  Field
-    { description = Just newDesc
-    , ..
-    }
-
-
 field :: Text -> IntrospectionType -> Field
 field fieldName fieldType =
   Field
@@ -248,6 +250,24 @@ field fieldName fieldType =
     , type_ = fieldType
     , isDeprecated = False
     , deprecationReason = Nothing
+    , customResolver = pure
+    }
+
+
+fieldWithDescription :: Text -> Field -> Field
+fieldWithDescription newDesc (Field{..}) =
+  Field
+    { description = Just newDesc
+    , ..
+    }
+
+
+deprecatedField :: Text -> Field -> Field
+deprecatedField reason (Field{..}) =
+  Field
+    { isDeprecated = True
+    , deprecationReason = Just reason
+    , ..
     }
 
 
@@ -260,8 +280,10 @@ data InputValue = InputValue
   , description :: Maybe Text
   , type_ :: IntrospectionType
   , defaultValue :: Maybe Value.Value
+  , isDeprecated :: Bool
+  , deprecationReason :: Maybe Text
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 instance ToGraphQL InputValue where
@@ -278,6 +300,8 @@ instance ToGraphQL InputValue where
               Nothing -> Value.Null
               Just s -> Value.String $ show s
           )
+        , ("isDeprecated", toGraphQL value.isDeprecated)
+        , ("deprecationReason", toGraphQL value.deprecationReason)
         ]
 
 
@@ -288,6 +312,8 @@ inputValue fieldName fieldType =
     , description = Nothing
     , type_ = fieldType
     , defaultValue = Nothing
+    , isDeprecated = False
+    , deprecationReason = Nothing
     }
 
 
@@ -307,13 +333,37 @@ withDefaultValue newValue (InputValue{..}) =
     }
 
 
+deprecatedInputValue :: Text -> InputValue -> InputValue
+deprecatedInputValue reason (InputValue{..}) =
+  InputValue
+    { isDeprecated = True
+    , deprecationReason = Just reason
+    , ..
+    }
+
+
+-- Rename an input value, deprecating the old version.
+renameInputValue :: Text -> Text -> InputValue -> [InputValue]
+renameInputValue to reason (InputValue{..}) =
+  [ InputValue
+      { name = to
+      , ..
+      }
+  , InputValue
+      { isDeprecated = True
+      , deprecationReason = Just reason
+      , ..
+      }
+  ]
+
+
 data EnumValue = EnumValue
   { name :: Text
   , description :: Maybe Text
   , isDeprecated :: Bool
   , deprecationReason :: Maybe Text
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 
 instance ToGraphQL EnumValue where
@@ -358,7 +408,7 @@ data Directive = Directive
   , args :: [InputValue]
   , isRepeatable :: Bool
   }
-  deriving (Generic, Show)
+  deriving (Generic)
 
 
 instance ToGraphQL Directive where
@@ -486,7 +536,8 @@ typeField =
     "__Field"
     [ field "name" $ nonNull typeString
     , field "description" typeString
-    , field "args" $ nonNull $ list $ nonNull typeInputValue
+    , field "args" (nonNull $ list $ nonNull typeInputValue)
+        & typeWithDeprecatedFilter
     , field "type" $ nonNull typeIntrospectionType
     , field "isDeprecated" $ nonNull typeBool
     , field "deprecationReason" typeString
@@ -507,6 +558,8 @@ typeInputValue =
         & fieldWithDescription
           "A GraphQL-formatted string representing \
           \the default value for this input value."
+    , field "isDeprecated" $ nonNull typeBool
+    , field "deprecationReason" typeString
     ]
     & withDescription
       "Arguments provided to Fields or Directives and the input \
@@ -574,16 +627,11 @@ typeIntrospectionType =
     , field "interfaces" $ list $ nonNull typeIntrospectionType
     , field "possibleTypes" $ list $ nonNull typeIntrospectionType
     , field "fields" (list $ nonNull typeField)
-        & withArguments
-          [ inputValue "includeDeprecated" typeBool
-              & withDefaultValue (toGraphQL False)
-          ]
+        & typeWithDeprecatedFilter
     , field "enumValues" (list $ nonNull typeEnumValue)
-        & withArguments
-          [ inputValue "includeDeprecated" typeBool
-              & withDefaultValue (toGraphQL False)
-          ]
-    , field "inputFields" $ list $ nonNull typeInputValue
+        & typeWithDeprecatedFilter
+    , field "inputFields" (list $ nonNull typeInputValue)
+        & typeWithDeprecatedFilter
     , field "ofType" typeIntrospectionType
     ]
     & withDescription
@@ -636,7 +684,11 @@ typeDirective =
     "__Directive"
     [ field "name" $ nonNull typeString
     , field "description" typeString
-    , field "args" $ nonNull $ list $ nonNull typeInputValue
+    , field "args" (nonNull $ list $ nonNull typeInputValue)
+        & withArguments
+          [ inputValue "includeDeprecated" typeBool
+              & withDefaultValue (toGraphQL False)
+          ]
     , field "isRepeatable" $ nonNull typeBool
     , field "locations" $ nonNull $ list $ nonNull typeDirectiveLocation
     ]
@@ -700,3 +752,38 @@ typeDirectiveLocation =
     & withDescription
       "A Directive can be adjacent to many parts of the GraphQL language, \
       \a __DirectiveLocation describes one such possible adjacencies."
+
+
+-- Internal helper which adds custom logic to a resolver for handling the
+-- `includeDeprecated` filter.
+typeWithDeprecatedFilter :: Field -> Field
+typeWithDeprecatedFilter Field{..} =
+  Field
+    { args =
+        args
+          <> [ inputValue "includeDeprecated" typeBool
+                & withDefaultValue (toGraphQL False)
+             ]
+    , customResolver = \case
+        Value.List values -> do
+          context <- ask
+          let
+            Value.Arguments gqlArgs = context.arguments
+            includeDeprecated = HashMap.lookup "includeDeprecated" gqlArgs
+            filtered =
+              if includeDeprecated == Just (Value.Boolean True)
+                then values
+                else
+                  filter
+                    ( \case
+                        Value.Object fields ->
+                          HashMap.lookup "isDeprecated" fields
+                            /= Just (Value.Boolean True)
+                        _ -> True
+                    )
+                    values
+
+          customResolver $ Value.List filtered
+        o -> customResolver o
+    , ..
+    }

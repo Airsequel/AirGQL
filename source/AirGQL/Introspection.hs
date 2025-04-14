@@ -114,21 +114,29 @@ filterType table = do
         let colName = columnEntry.column_name_gql
         let typeName = columnTypeName columnEntry
         let type_ = columnType columnEntry
-        Type.inputValue colName $
-          Type.withDescription ("Compare to a(n) " <> typeName) $
-            Type.inputObject
-              (typeName <> "Comparison")
-              [ Type.inputValue "eq" type_
-              , Type.inputValue "neq" type_
-              , Type.inputValue "gt" type_
-              , Type.inputValue "gte" type_
-              , Type.inputValue "lt" type_
-              , Type.inputValue "lte" type_
-              , Type.inputValue "like" type_
-              , Type.inputValue "ilike" type_
-              , Type.inputValue "in" $ Type.list type_
-              , Type.inputValue "nin" $ Type.list type_
+
+        let comparisonField name ty =
+              [ Type.deprecatedInputValue "Unify naming with Hasura" $
+                  Type.inputValue name ty
+              , Type.inputValue ("_" <> name) ty
               ]
+
+        Type.inputValue colName
+          $ Type.withDescription ("Compare to a(n) " <> typeName)
+          $ Type.inputObject
+            (typeName <> "Comparison")
+          $ P.fold
+            [ comparisonField "eq" type_
+            , comparisonField "neq" type_
+            , comparisonField "gt" type_
+            , comparisonField "gte" type_
+            , comparisonField "lt" type_
+            , comparisonField "lte" type_
+            , comparisonField "like" type_
+            , comparisonField "ilike" type_
+            , comparisonField "in" $ Type.list type_
+            , comparisonField "nin" $ Type.list type_
+            ]
 
   Type.inputObject
     (doubleXEncodeGql table.name <> "_filter")
@@ -175,9 +183,12 @@ tableQueryField table =
       (Type.nonNull $ Type.list $ Type.nonNull $ tableRowType table)
       & Type.fieldWithDescription ("Rows from the table \"" <> table.name <> "\"")
       & Type.withArguments
-        [ Type.inputValue "filter" (filterType table)
+        ( Type.inputValue "filter" (filterType table)
             & Type.inputValueWithDescription "Filter to select specific rows"
-        , Type.inputValue "order_by" (Type.list orderType)
+            & Type.renameInputValue "where" "Unify naming with Hasura"
+        )
+      & Type.withArguments
+        [ Type.inputValue "order_by" (Type.list orderType)
             & Type.inputValueWithDescription "Columns used to sort the data"
         , Type.inputValue "limit" Type.typeInt
             & Type.inputValueWithDescription "Limit the number of returned rows"
@@ -359,15 +370,19 @@ tableUpdateField accessMode table = do
     & Type.fieldWithDescription
       ("Update rows in table \"" <> table.name <> "\"")
     & Type.withArguments
-      [ Type.inputValue
+      ( Type.inputValue
           "set"
           (Type.nonNull $ tableSetInput table)
           & Type.inputValueWithDescription "Fields to be updated"
-      , Type.inputValue
+          & Type.renameInputValue "_set" "Unify naming with Hasura"
+      )
+    & Type.withArguments
+      ( Type.inputValue
           "filter"
           (Type.nonNull $ filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be updated"
-      ]
+          & Type.renameInputValue "where" "Unify naming with Hasura"
+      )
 
 
 tableUpdateFieldByPk
@@ -409,11 +424,12 @@ tableDeleteField accessMode table = do
     & Type.fieldWithDescription
       ("Delete rows in table \"" <> table.name <> "\"")
     & Type.withArguments
-      [ Type.inputValue
+      ( Type.inputValue
           "filter"
           (Type.nonNull $ filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be deleted"
-      ]
+          & Type.renameInputValue "where" "Unify naming with Hasura"
+      )
 
 
 tableDeleteFieldByPK

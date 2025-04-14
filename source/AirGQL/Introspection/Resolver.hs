@@ -30,6 +30,7 @@ import Control.Exception qualified as Exception
 import Data.HashMap.Strict qualified as HashMap
 import Data.Text qualified as T
 import GHC.IO.Exception (userError)
+import Language.GraphQL.Class (ToGraphQL (toGraphQL))
 import Language.GraphQL.Error (ResolverException (ResolverException))
 import Language.GraphQL.Type qualified as Type
 import Language.GraphQL.Type.In qualified as In
@@ -120,7 +121,7 @@ makeType =
             $ HashMap.fromList
             $ ("__typename", typenameResolver) : resolvers
         _ -> do
-          Left $ "invalid type in out position: " <> show ty.kind
+          Left $ "invalid type in out position: " <> show (toGraphQL ty)
 
     -- Creates a field which looks up it's value in the object returned by the
     -- parent resolver.
@@ -152,7 +153,7 @@ makeType =
               _ -> pure ()
 
             case HashMap.lookup field.name obj of
-              Just value -> pure value
+              Just value -> field.customResolver value
               Nothing -> defaultValue
           _ -> defaultValue
   in
@@ -219,4 +220,4 @@ makeInType ty = do
           ty.description
         $ HashMap.fromList gqlFields
     _ -> do
-      Left $ "invalid type in input position: " <> show ty.kind
+      Left $ "invalid type in input position: " <> show (toGraphQL ty)
