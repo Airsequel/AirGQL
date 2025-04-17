@@ -992,7 +992,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       let Arguments args = context.arguments
       liftIO $ do
         filterObj <- getArg "where" ["filter"] args
-        pairsToSet <- getArg "set" [] args
+        pairsToSet <- getArg "_set" ["set"] args
         (numOfChanges, updatedRows) <- case HashMap.toList filterObj of
           [] -> P.throwIO $ userError "Error: Filter must not be empty"
           filterElements ->
@@ -1020,6 +1020,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
             (encodeOutsidePKNames table "_set")
             [encodeOutsidePKNames table "set"]
             args
+
         (numOfChanges, updatedRows) <-
           executeUpdateMutation
             connection

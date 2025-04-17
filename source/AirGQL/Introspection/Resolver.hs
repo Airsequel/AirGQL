@@ -102,7 +102,7 @@ makeType =
               if depth >= 30
                 then
                   makeConstField
-                    (IType.field field.name IType.typeString)
+                    (IType.field field.name $ IType.nonNull IType.typeString)
                     (Type.String "Maximum depth exceeded")
                 else makeChildField (depth + 1) field
             pure (field.name, resolver)
@@ -112,21 +112,20 @@ makeType =
               (IType.field "__typename" $ IType.nonNull IType.typeString)
               (Type.String name)
 
-          pure
-            $ Out.NamedObjectType
-            $ Type.ObjectType
-              name
-              ty.description
-              []
-            $ HashMap.fromList
-            $ ("__typename", typenameResolver) : resolvers
+          pure $
+            Out.NamedObjectType $
+              Type.ObjectType name ty.description [] $
+                HashMap.fromList $
+                  ("__typename", typenameResolver) : resolvers
         _ -> do
           Left $ "invalid type in out position: " <> show (toGraphQL ty)
 
-    -- Creates a field which looks up it's value in the object returned by the
+    -- Creates a field which looks up its value in the object returned by the
     -- parent resolver.
     makeChildField :: Int -> IType.Field -> Result (Out.Resolver IO)
     makeChildField depth field = do
+      -- These lines are the same as `makeField`, except calling
+      -- `makeTypeWithDepthMemo` instead of `makeType`
       args <- P.for field.args $ \arg -> do
         ty <- makeInType arg.type_
         pure (arg.name, In.Argument arg.description ty arg.defaultValue)
@@ -145,7 +144,7 @@ makeType =
                       <> "' not found "
                 else pure Type.Null
 
-        case context.values of
+        result <- case context.values of
           Type.Object obj -> do
             let errorValue = HashMap.lookup ("__error_" <> field.name) obj
             P.for_ errorValue $ \case
@@ -153,9 +152,11 @@ makeType =
               _ -> pure ()
 
             case HashMap.lookup field.name obj of
-              Just value -> field.customResolver value
+              Just value -> pure value
               Nothing -> defaultValue
           _ -> defaultValue
+
+        field.customResolver result
   in
     makeTypeWithDepth 0
 

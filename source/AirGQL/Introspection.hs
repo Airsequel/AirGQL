@@ -372,14 +372,14 @@ tableUpdateField accessMode table = do
     & Type.withArguments
       ( Type.inputValue
           "set"
-          (Type.nonNull $ tableSetInput table)
+          (tableSetInput table)
           & Type.inputValueWithDescription "Fields to be updated"
           & Type.renameInputValue "_set" "Unify naming with Hasura"
       )
     & Type.withArguments
       ( Type.inputValue
           "filter"
-          (Type.nonNull $ filterType table)
+          (filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be updated"
           & Type.renameInputValue "where" "Unify naming with Hasura"
       )
@@ -393,14 +393,6 @@ tableUpdateFieldByPk
 tableUpdateFieldByPk accessMode tables table = do
   pkArguments <- tablePKArguments table
 
-  let arguments =
-        [ Type.inputValue
-            (encodeOutsidePKNames table "set")
-            (Type.nonNull $ tableSetInput table)
-            & Type.inputValueWithDescription "Fields to be updated"
-        ]
-          <> pkArguments
-
   pure $
     Type.field
       ( "update_"
@@ -413,7 +405,16 @@ tableUpdateFieldByPk accessMode tables table = do
       (Type.nonNull $ mutationByPkResponseType accessMode table)
       & Type.fieldWithDescription
         ("Update row in table \"" <> table.name <> "\" by PK")
-      & Type.withArguments arguments
+      & Type.withArguments pkArguments
+      & Type.withArguments
+        ( Type.inputValue
+            (encodeOutsidePKNames table "set")
+            (tableSetInput table)
+            & Type.inputValueWithDescription "Fields to be updated"
+            & Type.renameInputValue
+              (encodeOutsidePKNames table "_set")
+              "Unify naming with Hasura"
+        )
 
 
 tableDeleteField :: AccessMode -> TableEntry -> Type.Field
@@ -426,7 +427,7 @@ tableDeleteField accessMode table = do
     & Type.withArguments
       ( Type.inputValue
           "filter"
-          (Type.nonNull $ filterType table)
+          (filterType table)
           & Type.inputValueWithDescription "Filter to select rows to be deleted"
           & Type.renameInputValue "where" "Unify naming with Hasura"
       )

@@ -54,7 +54,7 @@ dbPath = testRoot </> "fixture.db"
 -- but some functions still take database IDs as arguments.
 -- Example usages include:
 -- - Including the ID in error messages
--- - Generating a URL where the user can access a file when it's cell needs
+-- - Generating a URL where the user can access a file when its cell needs
 --     to be converted to GraphQL
 --
 -- Those usages don't matter when testing, so we use a dummy ID instead.
