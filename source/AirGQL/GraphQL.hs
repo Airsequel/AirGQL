@@ -40,6 +40,7 @@ import Protolude (
   (<=),
   (>),
   (>=),
+  (||),
  )
 import Protolude qualified as P
 
@@ -213,33 +214,36 @@ getColNamesQuoted columnEntries =
 opAndValToSql :: HashMap.HashMap Text Value -> [Text]
 opAndValToSql operatorAndValue =
   case HashMap.toList operatorAndValue of
-    [("eq", value)] ->
-      pure $
-        if value == Null
-          then " IS NULL"
-          else " == " <> gqlValueToSQLText value
-    [("neq", value)] ->
-      if value == Null
-        then pure " IS NOT NULL"
-        else
-          [ " != " <> gqlValueToSQLText value
-          , " IS NULL"
-          ]
-    [("in", List values)] ->
-      let listValues = values <&> gqlValueToSQLText & intercalate ","
-      in  [" IN (" <> listValues <> ")"]
-    [("nin", List values)] ->
-      let listValues = values <&> gqlValueToSQLText & intercalate ","
-      in  [" NOT IN (" <> listValues <> ")"]
-            <> if P.elem Null values
-              then []
-              else [" IS NULL"]
-    [("gt", value)] -> [" > " <> gqlValueToSQLText value]
-    [("gte", value)] -> [" >= " <> gqlValueToSQLText value]
-    [("lt", value)] -> [" < " <> gqlValueToSQLText value]
-    [("lte", value)] -> [" <= " <> gqlValueToSQLText value]
-    [("like", value)] -> [" like " <> gqlValueToSQLText value]
-    [("ilike", value)] -> [" like " <> gqlValueToSQLText value]
+    [(op, value)]
+      | op == "eq" || op == "_eq" ->
+          pure $
+            if value == Null
+              then " IS NULL"
+              else " == " <> gqlValueToSQLText value
+      | op == "neq" || op == "_neq" ->
+          if value == Null
+            then pure " IS NOT NULL"
+            else
+              [ " != " <> gqlValueToSQLText value
+              , " IS NULL"
+              ]
+      | op == "in" || op == "_in"
+      , List values <- value ->
+          let listValues = values <&> gqlValueToSQLText & intercalate ","
+          in  [" IN (" <> listValues <> ")"]
+      | op == "nin" || op == "_nin"
+      , List values <- value ->
+          let listValues = values <&> gqlValueToSQLText & intercalate ","
+          in  [" NOT IN (" <> listValues <> ")"]
+                <> if P.elem Null values
+                  then []
+                  else [" IS NULL"]
+      | op == "gt" || op == "_gt" -> [" > " <> gqlValueToSQLText value]
+      | op == "gte" || op == "_gte" -> [" >= " <> gqlValueToSQLText value]
+      | op == "lt" || op == "_lt" -> [" < " <> gqlValueToSQLText value]
+      | op == "lte" || op == "_lte" -> [" <= " <> gqlValueToSQLText value]
+      | op == "like" || op == "_like" -> [" like " <> gqlValueToSQLText value]
+      | op == "ilike" || op == "_ilike" -> [" like " <> gqlValueToSQLText value]
     filter -> do
       throw $
         userError $
@@ -451,16 +455,21 @@ rowsToGraphQL dbId table updatedRows =
     & List
 
 
+-- Attempts to find and decode an argument, given its current name, and a list
+-- of deprecated older names.
 tryGetArg
   :: forall m a
    . (FromGraphQL a)
   => (MonadIO m)
   => Text
+  -> [Text]
   -> HashMap Text Value
   -> m (Maybe a)
-tryGetArg name args = do
+tryGetArg name alts args = do
   case HashMap.lookup name args of
-    Nothing -> pure Nothing
+    Nothing -> case alts of
+      alt : others -> tryGetArg alt others args
+      [] -> pure Nothing
     Just value ->
       case fromGraphQL value of
         Just decoded -> pure $ Just decoded
@@ -470,15 +479,17 @@ tryGetArg name args = do
               "Argument " <> T.unpack name <> " has invalid format"
 
 
+-- Similar to `tryGetArg`, but will error out on failure.
 getArg
   :: forall m a
    . (FromGraphQL a)
   => (MonadIO m)
   => Text
+  -> [Text]
   -> HashMap Text Value
   -> m a
-getArg name args = do
-  result <- tryGetArg name args
+getArg name alts args = do
+  result <- tryGetArg name alts args
   case result of
     Just value -> pure value
     Nothing ->
@@ -487,16 +498,18 @@ getArg name args = do
           "Argument " <> T.unpack name <> " not found"
 
 
+-- Similar to `tryGetArg`, but will return a custom value on failure.
 getArgWithDefault
   :: forall m a
    . (FromGraphQL a)
   => (MonadIO m)
   => Text
+  -> [Text]
   -> HashMap Text Value
   -> a
   -> m a
-getArgWithDefault name args def =
-  tryGetArg name args <&> P.fromMaybe def
+getArgWithDefault name alts args def =
+  tryGetArg name alts args <&> P.fromMaybe def
 
 
 executeUpdateMutation
@@ -608,13 +621,8 @@ queryType connection accessMode dbId tables = do
 
       rows :: [[SQLData]] <- case context.arguments of
         Arguments args -> do
-          filterElements <- case args & HashMap.lookup "filter" of
-            Nothing -> pure []
-            Just colToFilter -> case colToFilter of
-              Object filterObj -> case HashMap.toList filterObj of
-                [] -> P.throwIO $ userError "Error: Filter must not be empty"
-                filterElements -> pure filterElements
-              _ -> pure []
+          filterElements :: HashMap Text Value <-
+            getArgWithDefault "where" ["filter"] args HashMap.empty
 
           orderElements :: [(Name, Value)] <-
             case args & HashMap.lookup "order_by" of
@@ -678,7 +686,7 @@ queryType connection accessMode dbId tables = do
                   [ "SELECT COUNT() FROM"
                   , quoteKeyword table.name
                   , "\n"
-                  , getWhereClause filterElements
+                  , getWhereClause $ HashMap.toList filterElements
                   ]
 
           -- Will be equal `Just numRows` when the number of
@@ -720,7 +728,7 @@ queryType connection accessMode dbId tables = do
               connection
               table.name
               table.columns
-              filterElements
+              (HashMap.toList filterElements)
               orderElements
               paginationMb
 
@@ -849,7 +857,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
           --   [ { name: "John", email: "john@example.com" }
           --   , { name: "Eve",  email: "eve@example.com" }
           --   ]
-          values :: [HashMap Text Value] <- getArg "objects" argMap
+          values :: [HashMap Text Value] <- getArg "objects" [] argMap
           let
             -- All colums that are contained in the entries
             containedColumns :: [Text]
@@ -866,12 +874,12 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                 <&> (\name -> ":" <> doubleXEncodeGql name)
 
           onConflictArg :: [HashMap Text Value] <-
-            getArgWithDefault "on_conflict" argMap []
+            getArgWithDefault "on_conflict" [] argMap []
 
           onConflictClauses <- P.for onConflictArg $ \fields -> do
             let
               getColumnList fieldName =
-                getArgWithDefault fieldName fields []
+                getArgWithDefault fieldName [] fields []
                   <&> P.mapMaybe
                     ( \case
                         Enum columnName -> Just columnName
@@ -895,7 +903,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                   <> " = :"
                   <> doubleXEncodeGql column
 
-            filterElements <- getArgWithDefault "where" fields mempty
+            filterElements <- getArgWithDefault "where" ["filter"] fields mempty
 
             pure $
               "ON CONFLICT ("
@@ -983,8 +991,8 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       context <- ask
       let Arguments args = context.arguments
       liftIO $ do
-        filterObj <- getArg "filter" args
-        pairsToSet <- getArg "set" args
+        filterObj <- getArg "where" ["filter"] args
+        pairsToSet <- getArg "_set" ["set"] args
         (numOfChanges, updatedRows) <- case HashMap.toList filterObj of
           [] -> P.throwIO $ userError "Error: Filter must not be empty"
           filterElements ->
@@ -1002,11 +1010,17 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       let Arguments args = context.arguments
       let filterElements =
             args
-              & HashMap.delete "set"
+              & HashMap.delete (encodeOutsidePKNames table "_set")
+              & HashMap.delete (encodeOutsidePKNames table "set")
               & getByPKFilterElements
 
       liftIO $ do
-        pairsToSet <- getArg (encodeOutsidePKNames table "set") args
+        pairsToSet <-
+          getArg
+            (encodeOutsidePKNames table "_set")
+            [encodeOutsidePKNames table "set"]
+            args
+
         (numOfChanges, updatedRows) <-
           executeUpdateMutation
             connection
@@ -1023,7 +1037,7 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
       let Arguments args = context.arguments
 
       liftIO $ do
-        filterElements <- getArg "filter" args
+        filterElements <- getArg "where" ["filter"] args
         let sqlQuery =
               Query $
                 P.unlines

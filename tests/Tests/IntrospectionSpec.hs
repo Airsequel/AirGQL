@@ -101,7 +101,7 @@ main = void $ do
                       {
                         "name": "users",
                         "args": [
-                          { "name": "filter",
+                          { "name": "where",
                             "type": { "name": "users_filter" }
                           },
                           { "name": "order_by",
@@ -118,7 +118,7 @@ main = void $ do
                       {
                         "name": "songs",
                         "args": [
-                          { "name": "filter",
+                          { "name": "where",
                             "type": { "name": "songs_filter" }
                           },
                           { "name": "order_by",
@@ -235,20 +235,20 @@ main = void $ do
                       {
                         "name": "update_users",
                         "args": [
-                          { "name": "filter" },
-                          { "name": "set" }
+                          { "name": "where" },
+                          { "name": "_set" }
                         ]
                       },
                       {
                         "name": "update_users_by_pk",
                         "args": [
                           { "name": "email" },
-                          { "name": "set" }
+                          { "name": "_set" }
                         ]
                       },
                       {
                         "name": "delete_users",
-                        "args": [ { "name": "filter" } ]
+                        "args": [ { "name": "where" } ]
                       },
                       {
                         "name": "delete_users_by_pk",
@@ -261,20 +261,20 @@ main = void $ do
                       {
                         "name": "update_songs",
                         "args": [
-                          { "name": "filter" },
-                          { "name": "set" }
+                          { "name": "where" },
+                          { "name": "_set" }
                         ]
                       },
                       {
                         "name": "update_songs_by_pk",
                         "args": [
                           { "name": "rowid" },
-                          { "name": "set" }
+                          { "name": "_set" }
                         ]
                       },
                       {
                         "name": "delete_songs",
-                        "args": [ { "name": "filter" } ]
+                        "args": [ { "name": "where" } ]
                       },
                       {
                         "name": "delete_songs_by_pk",
@@ -626,8 +626,8 @@ main = void $ do
     Right result <- graphql schema Nothing mempty introspectionQuery
 
     -- Uncomment to write the new file to disk (for easier diffing)
-    -- writeFile (testRoot </> "new_introspection_result.json") $
-    --   decodeUtf8 $
+    -- P.writeFile (testRoot </> "new_introspection_result.json") $
+    --   P.decodeUtf8 $
     --     BL.toStrict $
     --       Ae.encode result
 
@@ -775,7 +775,7 @@ main = void $ do
     it "appends _ at the end of argument names to avoid conflicts" $ do
       let dbName = "by-pk-arg-names.db"
       withTestDbConn dbName $ \conn -> do
-        SS.execute_ conn [sql| CREATE TABLE foo ("set" INT PRIMARY KEY) |]
+        SS.execute_ conn [sql| CREATE TABLE foo ("_set" INT PRIMARY KEY) |]
 
         let
           introspectionQuery =
@@ -804,24 +804,24 @@ main = void $ do
                         {
                           "name": "update_foo",
                           "args": [
-                            { "name": "set" },
-                            { "name": "filter" }
+                            { "name": "_set" },
+                            { "name": "where" }
                           ]
                         },
                         {
                           "name": "update_foo_by_pk",
                           "args": [
-                            { "name": "set" },
-                            { "name": "set_" }
+                            { "name": "_set" },
+                            { "name": "_set_" }
                           ]
                         },
                         {
                           "name": "delete_foo",
-                          "args": [{ "name": "filter" }]
+                          "args": [{ "name": "where" }]
                         },
                         {
                           "name": "delete_foo_by_pk",
-                          "args": [{ "name": "set" }]
+                          "args": [{ "name": "_set" }]
                         }
                       ]
                     }
