@@ -18,8 +18,8 @@ import Data.Aeson qualified as Ae
 import Data.Aeson.KeyMap qualified as KeyMap
 import Database.SQLite.Simple qualified as SS
 import Database.SQLite.Simple.QQ (sql)
+import Language.GraphQL.Class (gql)
 import Language.GraphQL.JSON (graphql)
-import Language.GraphQL.TH (gql)
 import System.FilePath ((</>))
 import Test.Hspec (Spec, describe, it, shouldBe)
 
@@ -617,10 +617,7 @@ main = void $ do
               SQLPost{query = "SELECT * from loaders"}
 
         restResult.rows
-          `shouldBe` [ KeyMap.singleton
-                        "progress"
-                        (Ae.Number 1.23)
-                     ]
+          `shouldBe` [KeyMap.singleton "progress" (Ae.Number 1.23)]
 
     it "supports variables" $ do
       let

@@ -17,8 +17,8 @@ import Protolude (
 import Data.Aeson qualified as Ae
 import Database.SQLite.Simple qualified as SS
 import Database.SQLite.Simple.QQ (sql)
+import Language.GraphQL.Class (gql)
 import Language.GraphQL.JSON (graphql)
-import Language.GraphQL.TH (gql)
 import System.Directory (makeAbsolute)
 import System.FilePath ((</>))
 import Test.Hspec (Spec, describe, it, shouldBe)

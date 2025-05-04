@@ -19,6 +19,9 @@ data OutObjectType m = OutObjectType
   }
 
 
+type role OutObjectType nominal
+
+
 outObjectTypeToObjectType :: OutObjectType m -> Out.ObjectType m
 outObjectTypeToObjectType objectType =
   Out.ObjectType
