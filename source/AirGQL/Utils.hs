@@ -358,4 +358,5 @@ withRetryConn :: FilePath -> (Connection -> IO a) -> IO a
 withRetryConn filePath action = do
   SS.withConnection filePath $ \conn -> do
     SS.execute_ conn "PRAGMA busy_timeout = 5000;" -- 5 seconds
+    SS.execute_ conn "PRAGMA foreign_keys = True"
     action conn

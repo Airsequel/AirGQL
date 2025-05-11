@@ -32,6 +32,7 @@ import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
 import AirGQL.Types.SqlQueryPostResult (
   SqlQueryPostResult (rows),
  )
+import AirGQL.Utils (withRetryConn)
 import Data.Text qualified as T
 import Database.SQLite.Simple (SQLData (SQLFloat, SQLInteger, SQLNull, SQLText))
 import Servant (runHandler)
@@ -193,7 +194,7 @@ main = void $ do
 
     it "supports inserting empty records" $ do
       let testDbPath = testRoot </> "empty-record-insertion.db"
-      SS.withConnection testDbPath $ \conn -> do
+      withRetryConn testDbPath $ \conn -> do
         SS.execute_
           conn
           [sql|

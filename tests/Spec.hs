@@ -180,7 +180,7 @@ testSuite = do
       results `shouldBe` ["hi world", "hi World", "HeLLo WorLd"]
 
     it "loads all tables from database" $ do
-      tables <- SS.withConnection dbPath $ \conn ->
+      tables <- withRetryConn dbPath $ \conn ->
         getTables conn
 
       shouldBe
@@ -217,7 +217,7 @@ testSuite = do
 
     describe "getColumns" $ do
       it "loads all columns from users table" $ do
-        tableColumns <- SS.withConnection dbPath $ \conn ->
+        tableColumns <- withRetryConn dbPath $ \conn ->
           getColumns fixtureDbId conn "users"
 
         let

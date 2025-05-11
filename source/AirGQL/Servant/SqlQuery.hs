@@ -104,7 +104,7 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
   validationErrors <- liftIO $ case parseSql sqlPost.query of
     Left error -> pure [prettyError error]
     Right statement@(CreateTable{}) ->
-      SS.withConnection (getMainDbPath dbId) $ \conn ->
+      withRetryConn (getMainDbPath dbId) $ \conn ->
         lintTableCreationCode (Just conn) statement
     _ -> pure []
 

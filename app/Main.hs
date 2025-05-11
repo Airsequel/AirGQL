@@ -64,6 +64,7 @@ import AirGQL.Utils (
   getGraphiQLVersion,
   getSqliteBinaryVersion,
   getSqliteEmbeddedVersion,
+  withRetryConn,
  )
 import Server.Server (platformApp)
 
@@ -198,7 +199,7 @@ main = do
       putText versionSlug
     ----------
     Serve{dbFilePath} -> do
-      SS.withConnection dbFilePath $ \conn -> do
+      withRetryConn dbFilePath $ \conn -> do
         P.when (dbFilePath == "") $
           P.die "ERROR: No database file path was specified"
 
