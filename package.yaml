@@ -30,7 +30,7 @@ flags:
     default: false
 
 dependencies:
-  - base >= 4.18.2 && < 4.20
+  - base >= 4.18.2 && <= 4.21
   - protolude >= 0.3.4 && < 0.4
   - text >= 2.0 && < 2.2
   - sqlite-simple >= 0.4.19 && < 0.5
@@ -98,7 +98,7 @@ library:
     - servant-multipart >= 0.12.1 && < 0.13
     - servant-server >= 0.20 && < 0.21
     - simple-sql-parser >= 0.6 && < 0.9
-    - template-haskell >= 2.20.0 && < 2.22
+    - template-haskell >= 2.20.0 && <= 2.23
     - time >= 1.12.2 && < 1.13
     - typed-process >= 0.2.11 && < 0.3
     - unix >= 2.8.4 && < 2.9
