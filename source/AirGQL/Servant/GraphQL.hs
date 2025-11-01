@@ -11,6 +11,7 @@ import Protolude (
   Semigroup ((<>)),
   ($),
   (&),
+  (||),
  )
 import Protolude qualified as P
 
@@ -73,7 +74,7 @@ gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
   catchAll
     ( liftIO $ do
         reqDir <-
-          if pathSeparator `T.elem` dbIdOrPath
+          if pathSeparator `T.elem` dbIdOrPath || '.' `T.elem` dbIdOrPath
             then pure $ takeDirectory $ T.unpack dbIdOrPath
             else makeAbsolute $ getDbDir dbIdOrPath
 

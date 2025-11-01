@@ -91,7 +91,7 @@ type PlatformAPI =
   :<|> "writeonly" :> "graphql"
           :> ReqBody '[JSON] GQLPost
           :> Post '[JSON] Object
-  
+
   :<|> "insertonly" :> "graphql"
           :> ReqBody '[JSON] GQLPost
           :> Post '[JSON] Object

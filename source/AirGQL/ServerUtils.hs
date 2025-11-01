@@ -12,6 +12,7 @@ import Protolude (
   ($),
   (&),
   (<&>),
+  (||),
  )
 import Protolude qualified as P
 
@@ -44,7 +45,7 @@ executeQuery
   -> IO Object
 executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
   let dbFilePath =
-        if pathSeparator `T.elem` dbIdOrPath
+        if pathSeparator `T.elem` dbIdOrPath || '.' `T.elem` dbIdOrPath
           then T.unpack dbIdOrPath
           else reqDir </> "main.sqlite"
 

@@ -29,7 +29,6 @@ import Protolude qualified as P
 
 import Data.Data (Data)
 import Data.Text qualified as T
-import Database.SQLite.Simple qualified as SS
 import GitHash (giDirty, giTag, tGitInfoCwd)
 import Network.HTTP.Client.MultipartFormData ()
 import Network.Wai (Middleware)
@@ -137,7 +136,7 @@ main = do
                 let exceptionText :: Text = show exception
                 if (exceptionText == "Thread killed by timeout manager")
                   || ( exceptionText
-                        == "Warp: Client closed connection prematurely"
+                         == "Warp: Client closed connection prematurely"
                      )
                   then pure ()
                   else do

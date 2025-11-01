@@ -98,6 +98,7 @@ library:
     - servant-multipart >= 0.12.1 && < 0.13
     - servant-server >= 0.20 && < 0.21
     - simple-sql-parser >= 0.6 && < 0.9
+    - sqlite-simple >= 0.4.19 && < 0.5
     - template-haskell >= 2.20.0 && < 2.22
     - time >= 1.12.2 && < 1.13
     - typed-process >= 0.2.11 && < 0.3
