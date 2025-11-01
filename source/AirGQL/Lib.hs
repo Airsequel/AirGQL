@@ -338,8 +338,8 @@ getTables connection = do
       WHERE
         type == 'table' OR
         type == 'view'
-    |]
-    :: IO [TableEntryRaw]
+    |] ::
+    IO [TableEntryRaw]
 
 
 getTableNames :: Connection -> IO [Text]
@@ -379,10 +379,10 @@ getFirstName namesMb = do
   pure (nameAsText first)
 
 
-getColumnUniqueConstraint
-  :: Text
-  -> SQL.ColConstraintDef
-  -> Maybe UniqueConstraint
+getColumnUniqueConstraint ::
+  Text ->
+  SQL.ColConstraintDef ->
+  Maybe UniqueConstraint
 getColumnUniqueConstraint col_name = \case
   SQL.ColConstraintDef names SQL.ColUniqueConstraint ->
     Just $
@@ -406,10 +406,10 @@ tableUniqueConstraints = \case
   _ -> []
 
 
-getColumnPKConstraint
-  :: Text
-  -> SQL.ColConstraintDef
-  -> Maybe PrimaryKeyConstraint
+getColumnPKConstraint ::
+  Text ->
+  SQL.ColConstraintDef ->
+  Maybe PrimaryKeyConstraint
 getColumnPKConstraint col_name = \case
   SQL.ColConstraintDef names (SQL.ColPrimaryKeyConstraint _) ->
     Just $
@@ -441,10 +441,10 @@ pkConstraintToUniqueConstraint pk =
     }
 
 
-getColumnCheckConstraint
-  :: Text
-  -> SQL.ColConstraintDef
-  -> Maybe CheckConstraint
+getColumnCheckConstraint ::
+  Text ->
+  SQL.ColConstraintDef ->
+  Maybe CheckConstraint
 getColumnCheckConstraint col_name = \case
   SQL.ColConstraintDef names (SQL.ColCheckConstraint expr) ->
     Just $
@@ -471,10 +471,10 @@ tableCheckConstraints = \case
   _ -> []
 
 
-getColumnReferencesConstraint
-  :: Text
-  -> SQL.ColConstraintDef
-  -> P.Either Text (Maybe ReferencesConstraint)
+getColumnReferencesConstraint ::
+  Text ->
+  SQL.ColConstraintDef ->
+  P.Either Text (Maybe ReferencesConstraint)
 getColumnReferencesConstraint col_name = \case
   SQL.ColConstraintDef
     names
@@ -497,9 +497,9 @@ getColumnReferencesConstraint col_name = \case
   _ -> pure Nothing
 
 
-tableReferencesConstraints
-  :: SQL.TableElement
-  -> P.Either Text [ReferencesConstraint]
+tableReferencesConstraints ::
+  SQL.TableElement ->
+  P.Either Text [ReferencesConstraint]
 tableReferencesConstraints = \case
   SQL.TableConstraintDef
     names
@@ -593,7 +593,7 @@ getSqlObjectName = \case
   SQL.CreateView _ _ names _ _ ->
     names
       >>= P.head
-        <&> nameAsText
+      <&> nameAsText
   _ -> Nothing
 
 
@@ -602,10 +602,10 @@ getSqlObjectName = \case
 An optional connection can be used to read existing indices for unique
 constraints of columns added after table creation.
 -}
-collectTableConstraints
-  :: Maybe SS.Connection
-  -> Statement
-  -> IO (P.Either Text ParsedTable)
+collectTableConstraints ::
+  Maybe SS.Connection ->
+  Statement ->
+  IO (P.Either Text ParsedTable)
 collectTableConstraints connectionMb statement = do
   uniqueIndices <- case (connectionMb, getSqlObjectName statement) of
     (Just conn, Just name) -> getTableUniqueIndexConstraints conn name
@@ -651,10 +651,10 @@ collectTableConstraints connectionMb statement = do
             }
 
 
-enrichTableEntry
-  :: SS.Connection
-  -> TableEntryRaw
-  -> IO (P.Either Text TableEntry)
+enrichTableEntry ::
+  SS.Connection ->
+  TableEntryRaw ->
+  IO (P.Either Text TableEntry)
 enrichTableEntry connection tableEntry@(TableEntryRaw{..}) =
   case parseSql tableEntry.sql of
     P.Left err -> pure $ P.Left (prettyError err)
@@ -713,10 +713,10 @@ resolveReferencesConstraint tables referencedTable = do
 
 
 --  See the docs for `resolveReferencesConstraint` for details
-resolveReferencesConstraintColumns
-  :: [TableEntry]
-  -> ReferencesConstraint
-  -> Maybe [(Text, Text)]
+resolveReferencesConstraintColumns ::
+  [TableEntry] ->
+  ReferencesConstraint ->
+  Maybe [(Text, Text)]
 resolveReferencesConstraintColumns allEntries constraint =
   case constraint.columns of
     ExplicitColumns explicit -> Just explicit
@@ -825,9 +825,9 @@ columnIsNonNull (ColumnDef _ _ constraints) =
 columnSelectOptions :: SQL.ColumnDef -> Maybe SelectOptions
 columnSelectOptions (ColumnDef _ _ colConstraints) =
   let
-    getSelectOptions
-      :: ColConstraintDef
-      -> Maybe SelectOptions
+    getSelectOptions ::
+      ColConstraintDef ->
+      Maybe SelectOptions
     getSelectOptions = \case
       ColConstraintDef
         _
@@ -848,10 +848,10 @@ columnSelectOptions (ColumnDef _ _ colConstraints) =
       & P.head
 
 
-getColumnsFromParsedTableEntry
-  :: Connection
-  -> TableEntry
-  -> IO [ColumnEntry]
+getColumnsFromParsedTableEntry ::
+  Connection ->
+  TableEntry ->
+  IO [ColumnEntry]
 getColumnsFromParsedTableEntry connection tableEntry = do
   keyColumns :: [[SQLData]] <-
     SS.query

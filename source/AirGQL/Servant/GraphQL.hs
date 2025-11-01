@@ -51,11 +51,11 @@ gqlQueryGetHandler dbId =
       }
 
 
-gqlQueryPostHandler
-  :: SchemaConf
-  -> Text
-  -> GQLPost
-  -> Servant.Handler Object
+gqlQueryPostHandler ::
+  SchemaConf ->
+  Text ->
+  GQLPost ->
+  Servant.Handler Object
 gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
   let
     handleNoDbError :: P.SomeException -> Servant.Handler a
@@ -89,9 +89,9 @@ gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
     handleNoDbError
 
 
-playgroundDefaultQueryHandler
-  :: Text
-  -> Servant.Handler Text
+playgroundDefaultQueryHandler ::
+  Text ->
+  Servant.Handler Text
 playgroundDefaultQueryHandler dbId = do
   liftIO $ withRetryConn (getMainDbPath dbId) $ \mainConn -> do
     tableEntries <- getTableNames mainConn

@@ -28,7 +28,14 @@ import AirGQL.Lib (getEnrichedTables, insertOnly, writeOnly)
 import AirGQL.Raw (raw)
 import AirGQL.Types.SchemaConf (SchemaConf (accessMode), defaultSchemaConf)
 import AirGQL.Utils (withRetryConn)
-import Tests.Utils (dbPath, fixtureDbId, rmSpaces, testRoot, unorderedShouldBe, withTestDbConn)
+import Tests.Utils (
+  dbPath,
+  fixtureDbId,
+  rmSpaces,
+  testRoot,
+  unorderedShouldBe,
+  withTestDbConn,
+ )
 
 
 main :: Spec

@@ -35,14 +35,14 @@ import AirGQL.Types.Types (
  )
 
 
-executeQuery
-  :: SchemaConf
-  -> Text
-  -> FilePath
-  -> Text
-  -> Object
-  -> Maybe Text
-  -> IO Object
+executeQuery ::
+  SchemaConf ->
+  Text ->
+  FilePath ->
+  Text ->
+  Object ->
+  Maybe Text ->
+  IO Object
 executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
   let dbFilePath =
         if pathSeparator `T.elem` dbIdOrPath || '.' `T.elem` dbIdOrPath

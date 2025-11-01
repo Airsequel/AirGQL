@@ -15,7 +15,11 @@ module AirGQL.Introspection.NamingConflict (
 
 import Protolude (Text, fromMaybe, ($), (<$>), (<>))
 
-import AirGQL.Lib (ColumnEntry (column_name_gql), TableEntry (name), getPKColumns)
+import AirGQL.Lib (
+  ColumnEntry (column_name_gql),
+  TableEntry (name),
+  getPKColumns,
+ )
 import Data.List qualified as List
 import DoubleXEncoding (doubleXEncodeGql)
 

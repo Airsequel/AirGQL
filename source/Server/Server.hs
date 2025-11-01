@@ -67,7 +67,10 @@ import AirGQL.Servant.GraphQL (
   playgroundDefaultQueryHandler,
  )
 import AirGQL.Servant.SqlQuery (sqlQueryPostHandler)
-import AirGQL.Types.SchemaConf (SchemaConf (accessMode, pragmaConf), defaultSchemaConf)
+import AirGQL.Types.SchemaConf (
+  SchemaConf (accessMode, pragmaConf),
+  defaultSchemaConf,
+ )
 import AirGQL.Types.SqlQueryPostResult (SqlQueryPostResult)
 import AirGQL.Types.Types (GQLPost)
 

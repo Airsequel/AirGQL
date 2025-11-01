@@ -36,7 +36,15 @@ import AirGQL.Utils (withRetryConn)
 import Data.Text qualified as T
 import Database.SQLite.Simple (SQLData (SQLFloat, SQLInteger, SQLNull, SQLText))
 import Servant (runHandler)
-import Tests.Utils (dbPath, fixtureDbId, rmSpaces, testRoot, unorderedShouldBe, withDataDbConn, withTestDbConn)
+import Tests.Utils (
+  dbPath,
+  fixtureDbId,
+  rmSpaces,
+  testRoot,
+  unorderedShouldBe,
+  withDataDbConn,
+  withTestDbConn,
+ )
 
 
 main :: Spec

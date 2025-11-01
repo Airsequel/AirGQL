@@ -50,8 +50,9 @@ as Elm relies on it for decoding.
 instance ToJSON SqlQueryPostResult where
   toEncoding sqlQueryPostResult =
     pairs $
-      "affectedTables" .= sqlQueryPostResult.affectedTables
-        <> "rows"
+      "affectedTables"
+        .= sqlQueryPostResult.affectedTables
+          <> "rows"
           `pair` ( sqlQueryPostResult.rows
                     & list
                       ( \(row :: Object) ->
@@ -70,8 +71,10 @@ instance ToJSON SqlQueryPostResult where
                             & pairs
                       )
                  )
-        <> "runtimeSeconds" .= sqlQueryPostResult.runtimeSeconds
-        <> "errors" .= sqlQueryPostResult.errors
+          <> "runtimeSeconds"
+        .= sqlQueryPostResult.runtimeSeconds
+          <> "errors"
+        .= sqlQueryPostResult.errors
 
 
 instance ToSample SqlQueryPostResult where

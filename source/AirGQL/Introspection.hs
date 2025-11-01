@@ -385,11 +385,11 @@ tableUpdateField accessMode table = do
       )
 
 
-tableUpdateFieldByPk
-  :: AccessMode
-  -> [TableEntry]
-  -> TableEntry
-  -> Maybe Type.Field
+tableUpdateFieldByPk ::
+  AccessMode ->
+  [TableEntry] ->
+  TableEntry ->
+  Maybe Type.Field
 tableUpdateFieldByPk accessMode tables table = do
   pkArguments <- tablePKArguments table
 
@@ -433,11 +433,11 @@ tableDeleteField accessMode table = do
       )
 
 
-tableDeleteFieldByPK
-  :: AccessMode
-  -> [TableEntry]
-  -> TableEntry
-  -> Maybe Type.Field
+tableDeleteFieldByPK ::
+  AccessMode ->
+  [TableEntry] ->
+  TableEntry ->
+  Maybe Type.Field
 tableDeleteFieldByPK accessMode tables table = do
   args <- tablePKArguments table
   pure $
@@ -476,10 +476,10 @@ directives =
   ]
 
 
-getSchema
-  :: AccessMode
-  -> [TableEntry]
-  -> Type.Schema
+getSchema ::
+  AccessMode ->
+  [TableEntry] ->
+  Type.Schema
 getSchema accessMode tables = do
   let
     queryType = do
@@ -532,10 +532,10 @@ schemaField = do
   pure $ Out.Field field.description ty mempty
 
 
-getSchemaResolver
-  :: AccessMode
-  -> [TableEntry]
-  -> IO (HashMap Text (Resolver IO))
+getSchemaResolver ::
+  AccessMode ->
+  [TableEntry] ->
+  IO (HashMap Text (Resolver IO))
 getSchemaResolver accessMode tables = do
   case schemaField of
     Right field -> do

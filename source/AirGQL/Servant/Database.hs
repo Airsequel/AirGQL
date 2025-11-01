@@ -29,17 +29,17 @@ import AirGQL.Utils (
  )
 
 
-apiDatabaseSchemaGetHandler
-  :: ExternalAppContext
-  -> Text
-  -> Servant.Handler Text
+apiDatabaseSchemaGetHandler ::
+  ExternalAppContext ->
+  Text ->
+  Servant.Handler Text
 apiDatabaseSchemaGetHandler ctx dbId = do
   runSqliteCommand ctx (getMainDbPath dbId) ".schema"
 
 
-apiDatabaseVacuumPostHandler
-  :: Text
-  -> Servant.Handler Object
+apiDatabaseVacuumPostHandler ::
+  Text ->
+  Servant.Handler Object
 apiDatabaseVacuumPostHandler dbId = do
   liftIO $ withRetryConn (getMainDbPath dbId) $ \conn ->
     SS.execute_ conn "VACUUM"

@@ -117,8 +117,8 @@ getSqliteEmbeddedVersion conn = do
   sqliteEmbeddedVersion <-
     SS.query_
       conn
-      "select sqlite_version()"
-      :: IO [[SS.SQLData]]
+      "select sqlite_version()" ::
+      IO [[SS.SQLData]]
   case sqliteEmbeddedVersion of
     [[SS.SQLText verTxt]] -> pure verTxt
     _ -> pure mempty
@@ -303,7 +303,8 @@ removeIfExists fileName =
     removeFile fileName `catch` handleExists
 
 
-runSqliteCommand :: ExternalAppContext -> FilePath -> BL.ByteString -> Servant.Handler Text
+runSqliteCommand ::
+  ExternalAppContext -> FilePath -> BL.ByteString -> Servant.Handler Text
 runSqliteCommand ctx dbPath command = do
   let
     processConfig =

@@ -308,14 +308,14 @@ setCaseInsensitive connection filterElements = do
       execute_ connection "PRAGMA case_sensitive_like = False"
 
 
-executeSqlQuery
-  :: Connection
-  -> Text
-  -> [ColumnEntry]
-  -> [(Text, Value)]
-  -> [(Text, Value)]
-  -> Maybe Pagination
-  -> IO [[SQLData]]
+executeSqlQuery ::
+  Connection ->
+  Text ->
+  [ColumnEntry] ->
+  [(Text, Value)] ->
+  [(Text, Value)] ->
+  Maybe Pagination ->
+  IO [[SQLData]]
 executeSqlQuery
   connection
   tableName
@@ -457,14 +457,14 @@ rowsToGraphQL dbId table updatedRows =
 
 -- Attempts to find and decode an argument, given its current name, and a list
 -- of deprecated older names.
-tryGetArg
-  :: forall m a
-   . (FromGraphQL a)
-  => (MonadIO m)
-  => Text
-  -> [Text]
-  -> HashMap Text Value
-  -> m (Maybe a)
+tryGetArg ::
+  forall m a.
+  (FromGraphQL a) =>
+  (MonadIO m) =>
+  Text ->
+  [Text] ->
+  HashMap Text Value ->
+  m (Maybe a)
 tryGetArg name alts args = do
   case HashMap.lookup name args of
     Nothing -> case alts of
@@ -480,14 +480,14 @@ tryGetArg name alts args = do
 
 
 -- Similar to `tryGetArg`, but will error out on failure.
-getArg
-  :: forall m a
-   . (FromGraphQL a)
-  => (MonadIO m)
-  => Text
-  -> [Text]
-  -> HashMap Text Value
-  -> m a
+getArg ::
+  forall m a.
+  (FromGraphQL a) =>
+  (MonadIO m) =>
+  Text ->
+  [Text] ->
+  HashMap Text Value ->
+  m a
 getArg name alts args = do
   result <- tryGetArg name alts args
   case result of
@@ -499,25 +499,25 @@ getArg name alts args = do
 
 
 -- Similar to `tryGetArg`, but will return a custom value on failure.
-getArgWithDefault
-  :: forall m a
-   . (FromGraphQL a)
-  => (MonadIO m)
-  => Text
-  -> [Text]
-  -> HashMap Text Value
-  -> a
-  -> m a
+getArgWithDefault ::
+  forall m a.
+  (FromGraphQL a) =>
+  (MonadIO m) =>
+  Text ->
+  [Text] ->
+  HashMap Text Value ->
+  a ->
+  m a
 getArgWithDefault name alts args def =
   tryGetArg name alts args <&> P.fromMaybe def
 
 
-executeUpdateMutation
-  :: Connection
-  -> TableEntry
-  -> HashMap Text Value
-  -> [(Text, Value)]
-  -> IO (Int, [[SQLData]])
+executeUpdateMutation ::
+  Connection ->
+  TableEntry ->
+  HashMap Text Value ->
+  [(Text, Value)] ->
+  IO (Int, [[SQLData]])
 executeUpdateMutation connection table pairsToSet filterElements = do
   let
     columnsToSet :: [(ColumnEntry, Value)]
@@ -573,10 +573,10 @@ executeUpdateMutation connection table pairsToSet filterElements = do
 wrapped such that exceptions are caught and converted to the appropriate type
 expected by the GQL query executor.
 -}
-makeResolver
-  :: Introspection.Field
-  -> Out.Resolve IO
-  -> IO (Text, Out.Resolver IO)
+makeResolver ::
+  Introspection.Field ->
+  Out.Resolve IO ->
+  IO (Text, Out.Resolver IO)
 makeResolver field resolve = do
   case Introspection.makeField field of
     Left err -> P.throwIO $ userError $ T.unpack err
@@ -592,10 +592,10 @@ makeResolver field resolve = do
 
 
 -- | Maps the inner computation held by a resolver
-wrapResolver
-  :: (Out.Resolve IO -> Out.Resolve IO)
-  -> Out.Resolver IO
-  -> Out.Resolver IO
+wrapResolver ::
+  (Out.Resolve IO -> Out.Resolve IO) ->
+  Out.Resolver IO ->
+  Out.Resolver IO
 wrapResolver f = \case
   ValueResolver field resolve ->
     ValueResolver field (f resolve)
@@ -603,12 +603,12 @@ wrapResolver f = \case
     EventStreamResolver field (f resolve) subscribe
 
 
-queryType
-  :: Connection
-  -> AccessMode
-  -> Text
-  -> [TableEntry]
-  -> IO (Out.ObjectType IO)
+queryType ::
+  Connection ->
+  AccessMode ->
+  Text ->
+  [TableEntry] ->
+  IO (Out.ObjectType IO)
 queryType connection accessMode dbId tables = do
   let
     documentation :: Text
@@ -810,13 +810,13 @@ queryType connection accessMode dbId tables = do
         }
 
 
-mutationType
-  :: Connection
-  -> Integer
-  -> AccessMode
-  -> Text
-  -> [TableEntry]
-  -> IO (Maybe (Out.ObjectType IO))
+mutationType ::
+  Connection ->
+  Integer ->
+  AccessMode ->
+  Text ->
+  [TableEntry] ->
+  IO (Maybe (Out.ObjectType IO))
 mutationType connection maxRowsPerTable accessMode dbId tables = do
   let
     getColValue :: HashMap.HashMap Text Value -> Text -> Value
@@ -1138,12 +1138,12 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
 
 
 -- | Automatically generated schema derived from the SQLite database
-getDerivedSchema
-  :: SchemaConf
-  -> Connection
-  -> Text
-  -> [TableEntry]
-  -> IO (Schema IO)
+getDerivedSchema ::
+  SchemaConf ->
+  Connection ->
+  Text ->
+  [TableEntry] ->
+  IO (Schema IO)
 getDerivedSchema schemaConf connection dbId tables = do
   let sqlitePragmas = getSQLitePragmas schemaConf.pragmaConf
   P.forM_ sqlitePragmas (execute_ connection)

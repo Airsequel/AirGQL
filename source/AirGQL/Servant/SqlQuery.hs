@@ -85,11 +85,11 @@ getAffectedTables pre post =
       (P.sortOn tbl_name post)
 
 
-sqlQueryPostHandler
-  :: PragmaConf
-  -> Text
-  -> SQLPost
-  -> Servant.Handler SqlQueryPostResult
+sqlQueryPostHandler ::
+  PragmaConf ->
+  Text ->
+  SQLPost ->
+  Servant.Handler SqlQueryPostResult
 sqlQueryPostHandler pragmaConf dbId sqlPost = do
   let maxSqlQueryLength :: P.Int = 100_000
 

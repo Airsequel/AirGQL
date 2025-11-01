@@ -30,7 +30,15 @@ import AirGQL.Raw (raw)
 import AirGQL.Types.SchemaConf (defaultSchemaConf)
 import AirGQL.Utils (removeIfExists, withRetryConn)
 import Data.Text qualified as T
-import Tests.Utils (dbPath, fixtureDbId, rmSpaces, shouldSaveDbs, testRoot, unorderedShouldBe, withTestDbConn)
+import Tests.Utils (
+  dbPath,
+  fixtureDbId,
+  rmSpaces,
+  shouldSaveDbs,
+  testRoot,
+  unorderedShouldBe,
+  withTestDbConn,
+ )
 
 
 main :: Spec
