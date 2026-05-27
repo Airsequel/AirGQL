@@ -100,7 +100,7 @@ import AirGQL.Types.OutObjectType (
  )
 import AirGQL.Types.PragmaConf (getSQLitePragmas)
 import AirGQL.Types.SchemaConf (
-  SchemaConf (accessMode, maxRowsPerTable, pragmaConf),
+  SchemaConf (accessMode, maxRowsPerTable, pragmaConf, upgradeTarget),
  )
 import AirGQL.Types.Utils (encodeToText)
 import AirGQL.Utils (colToFileUrl, quoteKeyword, quoteText)
@@ -813,11 +813,12 @@ queryType connection accessMode dbId tables = do
 mutationType ::
   Connection ->
   Integer ->
+  Text ->
   AccessMode ->
   Text ->
   [TableEntry] ->
   IO (Maybe (Out.ObjectType IO))
-mutationType connection maxRowsPerTable accessMode dbId tables = do
+mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
   let
     getColValue :: HashMap.HashMap Text Value -> Text -> Value
     getColValue rowObj columnName =
@@ -966,8 +967,9 @@ mutationType connection maxRowsPerTable accessMode dbId tables = do
                   when (numRows >= maxRowsPerTable) $
                     P.throwIO $
                       userError $
-                        "Please upgrade to a Pro account \
-                        \to insert more than "
+                        "Please upgrade to "
+                          <> T.unpack upgradeTo
+                          <> " account to insert more than "
                           <> show maxRowsPerTable
                           <> " rows into a table"
                 _ -> pure ()
@@ -1153,6 +1155,7 @@ getDerivedSchema schemaConf connection dbId tables = do
     mutationType
       connection
       schemaConf.maxRowsPerTable
+      schemaConf.upgradeTarget
       schemaConf.accessMode
       dbId
       tables

@@ -32,7 +32,7 @@ defaultConfig =
   Config
     { maxTablesPerDb = 100
     , maxColumnsPerTable = 500
-    , maxRowsPerTable = 100_000
+    , maxRowsPerTable = 1_000_000
     , maxVisibleCellsPerTable = 0 -- Not used currently
     , maxDbSize = 100_000_000 -- Bytes
     , maxCellSize = 10_000_000 -- Bytes
