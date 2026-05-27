@@ -1187,6 +1187,13 @@ sanitizeSql sql =
     & replaceCaseInsensitive
       "sqlite_sequence(name,seq)"
       "sqlite_sequence(name TEXT,seq INT)"
+    -- Internal tables created by `ANALYZE` without column types
+    & replaceCaseInsensitive
+      "sqlite_stat1(tbl,idx,stat)"
+      "sqlite_stat1(tbl TEXT,idx TEXT,stat TEXT)"
+    & replaceCaseInsensitive
+      "sqlite_stat4(tbl,idx,neq,nlt,ndlt,sample)"
+      "sqlite_stat4(tbl TEXT,idx TEXT,neq TEXT,nlt TEXT,ndlt TEXT,sample BLOB)"
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/40
     & replaceWithSpace "NOT NULL DEFAULT" "DEFAULT"
