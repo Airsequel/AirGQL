@@ -1244,6 +1244,13 @@ sqlite =
              , "tan"
              , "tanh"
              , "trunc"
+             , -- These are reserved keywords as well, but must also be
+               -- callable as their scalar function forms, e.g. replace(X,Y,Z).
+               -- "match" is intentionally excluded: it is only the FTS MATCH
+               -- operator and has no usable scalar function form.
+               "replace"
+             , "like"
+             , "glob"
              ]
     , diKeywords =
         [ "abort"

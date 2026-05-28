@@ -596,6 +596,32 @@ testSuite = do
 
           result.affectedTables `shouldMatchList` []
 
+      it "supports scalar functions that are also keywords" $ do
+        let dbId = "api-sql-keyword-functions"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                ("_TEST_" <> dbId)
+                SQLPost
+                  { query =
+                      "SELECT "
+                        <> "replace('hello', 'e', 'XXX'), "
+                        <> "like('hel%', 'hello'), "
+                        <> "glob('hel*', 'hello')"
+                  }
+
+          result.rows
+            `shouldBe` [ KeyMap.fromList
+                          [ ("replace('hello', 'e', 'XXX')", "hXXXllo")
+                          , ("like('hel%', 'hello')", Number 1)
+                          , ("glob('hel*', 'hello')", Number 1)
+                          ]
+                       ]
+
+          result.affectedTables `shouldMatchList` []
+
       -- The following few tests verify that different operations return
       -- the proper set of affected tables. This query creates a completely
       -- unrelated table just to ensure it is not getting returned by the
