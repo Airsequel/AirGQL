@@ -248,6 +248,67 @@ main = void $ do
         allItems <- SS.query_ conn "select * from items"
         allItems `shouldBe` [[SQLInteger 1]]
 
+    it "returns a file reference when inserting into a NOT NULL file column" $ do
+      -- Regression test: inserting into a table with a NOT NULL BLOB_FILE
+      -- column (without providing the file) used to fail with the opaque
+      -- "Value completion error. Expected type String!, found: null", because
+      -- the RETURNING clause returned the raw blob instead of the rowid
+      -- reference that `rowToGraphQL` turns into a file URL.
+      let testDbPath = testRoot </> "blob-file-returning.db"
+      withRetryConn testDbPath $ \conn -> do
+        SS.execute_ conn "DROP TABLE IF EXISTS documents"
+        SS.execute_
+          conn
+          [sql|
+            CREATE TABLE documents (
+              name TEXT,
+              content BLOB_FILE DEFAULT x'' NOT NULL
+            )
+          |]
+
+        Right tables <- getEnrichedTables conn
+        schema <-
+          getDerivedSchema
+            defaultSchemaConf
+            conn
+            "file-test"
+            tables
+
+        let
+          mutation =
+            [gql|
+                mutation InsertDocument {
+                  insert_documents(objects: [{ name: "doc1" }]) {
+                    affected_rows
+                    returning {
+                      name
+                      content
+                    }
+                  }
+                }
+              |]
+          expected =
+            rmSpaces
+              [raw|
+                {
+                  "data": {
+                    "insert_documents": {
+                      "affected_rows": 1,
+                      "returning": [
+                        {
+                          "name": "doc1",
+                          "content": "{\"url\":\"/readonly/file-test/tables/documents/columns/content/files/rowid/1\"}"
+                        }
+                      ]
+                    }
+                  }
+                }
+              |]
+
+        Right result <- graphql schema Nothing mempty mutation
+
+        Ae.encode result `shouldBe` expected
+
     it "supports inserting data and returning the created data" $ do
       let
         query =

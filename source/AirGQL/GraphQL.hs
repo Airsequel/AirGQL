@@ -87,7 +87,7 @@ import AirGQL.Introspection.Resolver qualified as Introspection
 import AirGQL.Introspection.Types qualified as Introspection
 import AirGQL.Lib (
   AccessMode (canInsert),
-  ColumnEntry (column_name, datatype),
+  ColumnEntry (column_name, datatype, notnull),
   ObjectType (Table),
   TableEntry (columns, name, object_type),
   canRead,
@@ -273,15 +273,15 @@ getWhereClause filterElements =
 
 
 -- The gql lib does not offer a way to know what properties have
--- been requested at the moment, so we always return every column
+-- been requested at the moment, so we always return every column.
+-- Uses `getColNamesQuoted` (same as SELECT) so that BLOB/file columns are
+-- returned as their rowid reference instead of the raw blob. Otherwise
+-- `rowToGraphQL` cannot turn the value into a file URL and the field resolves
+-- to null, which fails for NOT NULL (`String!`) file columns.
 getReturningClause :: TableEntry -> Text
 getReturningClause table =
   "RETURNING "
-    <> ( table.columns
-          <&> column_name
-          <&> quoteKeyword
-          & intercalate ", "
-       )
+    <> intercalate ", " (getColNamesQuoted table.columns)
 
 
 -- | Converts an argument map of (pk, value) pairs into a list of filters
@@ -411,18 +411,39 @@ rowToGraphQL dbId table row =
     parseSqlData :: (ColumnEntry, SQLData) -> (Text, Value)
     parseSqlData (colEntry, colVal) =
       if "BLOB" `T.isPrefixOf` colEntry.datatype
-        then
-          ( colEntry.column_name_gql
-          , case colVal of
-              SQLNull -> Null
-              SQLInteger id ->
-                String $
-                  buildMetadataJson colEntry.column_name (show id)
-              SQLText id ->
-                String $
-                  buildMetadataJson colEntry.column_name id
-              _ -> Null
-          )
+        then case colVal of
+          SQLInteger rowid ->
+            ( colEntry.column_name_gql
+            , String $ buildMetadataJson colEntry.column_name (show rowid)
+            )
+          SQLText rowid ->
+            ( colEntry.column_name_gql
+            , String $ buildMetadataJson colEntry.column_name rowid
+            )
+          -- A null file column is fine if the column is nullable.
+          -- If it is NOT NULL, returning null here would make the GraphQL
+          -- engine emit an opaque
+          -- "Value completion error. Expected type String!, found: null",
+          -- so we surface a descriptive error via the `__error_` convention
+          -- (see `makeChildField` in AirGQL.Introspection.Resolver).
+          SQLNull
+            | colEntry.notnull ->
+                ( "__error_" <> colEntry.column_name_gql
+                , String $
+                    "File column '"
+                      <> colEntry.column_name
+                      <> "' is defined as NOT NULL but has no file content. "
+                      <> "Upload a file to this column, or make it nullable."
+                )
+            | otherwise ->
+                (colEntry.column_name_gql, Null)
+          _ ->
+            ( "__error_" <> colEntry.column_name_gql
+            , String $
+                "File column '"
+                  <> colEntry.column_name
+                  <> "' could not be read as a file reference."
+            )
         else case sqlDataToGQLValue colEntry.datatype colVal of
           Left err ->
             ( "__error_" <> colEntry.column_name_gql
