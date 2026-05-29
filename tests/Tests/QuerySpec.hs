@@ -671,6 +671,51 @@ main = void $ do
 
       Ae.encode result1 `shouldBe` expected
 
+  it "supports views selecting columns named like SQL keywords" $ do
+    -- Regression test: the approximate SQL parser used for table enrichment
+    -- treats words like "key" as reserved, but SQLite allows them as column
+    -- names. Views must not have their SELECT body parsed, as it would reject
+    -- otherwise valid SQLite. See `enrichTableEntry`.
+    withTestDbConn "keyword-column_view.db" $ \conn -> do
+      SS.execute_
+        conn
+        [sql| CREATE TABLE key_values (key TEXT, value TEXT) |]
+      SS.execute_
+        conn
+        [sql| INSERT INTO key_values (key, value) VALUES ('a', '1') |]
+      SS.execute_
+        conn
+        [sql|
+          CREATE VIEW keyword_view AS
+          SELECT key, value FROM key_values
+        |]
+
+      Right tables <- getEnrichedTables conn
+      schema <- getDerivedSchema defaultSchemaConf conn fixtureDbId tables
+
+      Right result <-
+        graphql
+          schema
+          Nothing
+          mempty
+          [gql|{
+          keyword_view { key value }
+        }|]
+
+      let expected =
+            rmSpaces
+              [raw|
+              {
+                "data": {
+                  "keyword_view": [
+                    { "key": "a", "value": "1" }
+                  ]
+                }
+              }
+            |]
+
+      Ae.encode result `shouldBe` expected
+
   it "supports querying a single entry by inferred pk" $ do
     conn <- SS.open dbPath
     SS.execute_

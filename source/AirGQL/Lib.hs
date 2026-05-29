@@ -656,14 +656,27 @@ enrichTableEntry ::
   TableEntryRaw ->
   IO (P.Either Text TableEntry)
 enrichTableEntry connection tableEntry@(TableEntryRaw{..}) =
-  case parseSql tableEntry.sql of
-    P.Left err -> pure $ P.Left (prettyError err)
-    P.Right sqlStatement ->
-      collectTableConstraints (Just connection) sqlStatement
-        <&> P.fmap
-          ( \(ParsedTable{..}) ->
-              TableEntry{columns = [], ..}
-          )
+  -- Views have no constraints (unique, primary key, references, …) and their
+  -- column info is read directly from SQLite via pragmas in
+  -- `getColumnsFromParsedTableEntry`. Parsing a view's `CREATE VIEW … AS
+  -- SELECT …` body is therefore pointless — `collectTableConstraints` discards
+  -- the result for non-`CREATE TABLE` statements. Worse, the approximate SQL
+  -- parser rejects plenty of valid SQLite (e.g. a column named "key"), which
+  -- would otherwise sink the whole introspection. So for views we skip parsing
+  -- the real SQL and feed the parser a trivial placeholder statement instead.
+  let
+    sqlToParse = case tableEntry.object_type of
+      View -> "SELECT 1"
+      _ -> tableEntry.sql
+  in
+    case parseSql sqlToParse of
+      P.Left err -> pure $ P.Left (prettyError err)
+      P.Right sqlStatement ->
+        collectTableConstraints (Just connection) sqlStatement
+          <&> P.fmap
+            ( \(ParsedTable{..}) ->
+                TableEntry{columns = [], ..}
+            )
 
 
 getEnrichedTables :: Connection -> IO (P.Either Text [TableEntry])
@@ -1329,7 +1342,6 @@ sqlite =
         , "is"
         , "isnull"
         , "join"
-        , "key"
         , "last"
         , "left"
         , "like"
