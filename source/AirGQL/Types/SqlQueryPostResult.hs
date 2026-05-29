@@ -6,6 +6,7 @@ where
 
 import Protolude (
   Generic,
+  Int,
   Show,
   Text,
   foldMap,
@@ -34,6 +35,7 @@ data SqlQueryPostResult = SqlQueryPostResult
   { affectedTables :: [Text]
   , rows :: [Object]
   , columns :: [Text] -- Only necessary for order of columns in the result
+  , numChanges :: Int -- Rows changed by INSERT/UPDATE/DELETE (0 for SELECT)
   , runtimeSeconds :: Pico -- Precision contained by `NominalDiffTime`
   , errors :: [Text]
   }
@@ -71,6 +73,8 @@ instance ToJSON SqlQueryPostResult where
                             & pairs
                       )
                  )
+          <> "numChanges"
+        .= sqlQueryPostResult.numChanges
           <> "runtimeSeconds"
         .= sqlQueryPostResult.runtimeSeconds
           <> "errors"
@@ -93,6 +97,7 @@ instance ToSample SqlQueryPostResult where
                 ]
             ]
         , columns = ["id", "name"]
+        , numChanges = 0
         , runtimeSeconds = 0.05
         , errors = []
         }
@@ -105,6 +110,7 @@ resultWithErrors runtimeSeconds errors =
     { affectedTables = []
     , rows = []
     , columns = []
+    , numChanges = 0
     , runtimeSeconds = runtimeSeconds
     , errors = errors
     }

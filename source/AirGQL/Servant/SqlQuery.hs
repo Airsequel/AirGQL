@@ -51,6 +51,7 @@ import AirGQL.Types.SqlQueryPostResult (
     affectedTables,
     columns,
     errors,
+    numChanges,
     rows,
     runtimeSeconds
   ),
@@ -188,6 +189,7 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
             SqlQueryPostResult
               { rows = rowList
               , columns = columnNames
+              , numChanges = changes
               , runtimeSeconds = measuredTime
               , affectedTables = affectedTables
               , errors = []
