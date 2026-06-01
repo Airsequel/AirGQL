@@ -58,7 +58,7 @@ import Protolude (
 import Protolude qualified as P
 
 import Control.Monad.Catch (catchAll)
-import Data.Aeson (KeyValue ((.=)), Value (String), encode, object)
+import Data.Aeson (KeyValue ((.=)), encode, object)
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (toLazyByteString)
 import Data.ByteString.Lazy qualified as BL
@@ -189,7 +189,10 @@ headerJsonContent =
   [("Content-Type", "application/json;charset=utf-8")]
 
 
--- | Throw the specified server error with a message
+{-| Throw the specified server error with a message.
+The GraphQL spec requires each entry in @errors@ to be an object with at
+least a @message@ field, not a bare string.
+-}
 throwServerErrorWithMsg :: ServerError -> Text -> Servant.Handler a
 throwServerErrorWithMsg serverError errorMsg =
   throwError $
@@ -198,7 +201,7 @@ throwServerErrorWithMsg serverError errorMsg =
       , errBody =
           encode $
             object
-              ["errors" .= [String errorMsg]]
+              ["errors" .= [object ["message" .= errorMsg]]]
       }
 
 
