@@ -363,4 +363,8 @@ withRetryConn filePath action = do
   SS.withConnection filePath $ \conn -> do
     SS.execute_ conn "PRAGMA busy_timeout = 5000;" -- 5 seconds
     SS.execute_ conn "PRAGMA foreign_keys = True"
+    -- `synchronous` is intentionally left at SQLite's default (FULL).
+    -- WAL + synchronous=FULL is durable on Linux. Do NOT lower to NORMAL
+    -- without accepting loss of recently-committed txns on power loss.
+    -- See https://www.agwa.name/blog/post/sqlite_durability
     action conn
