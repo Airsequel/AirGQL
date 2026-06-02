@@ -975,7 +975,7 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
                   <&> gqlValueToSQLData
 
           returnedRows <-
-            liftIO $ P.forM sqlDataRows $ \sqlDataRow -> do
+            liftIO $ SS.withImmediateTransaction connection $ P.forM sqlDataRows $ \sqlDataRow -> do
               numRowsRes :: [[Integer]] <-
                 query_
                   connection
@@ -1019,11 +1019,12 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
         (numOfChanges, updatedRows) <- case HashMap.toList filterObj of
           [] -> P.throwIO $ userError "Error: Filter must not be empty"
           filterElements ->
-            executeUpdateMutation
-              connection
-              table
-              pairsToSet
-              filterElements
+            SS.withImmediateTransaction connection $
+              executeUpdateMutation
+                connection
+                table
+                pairsToSet
+                filterElements
 
         mutationResponse table numOfChanges updatedRows
 
@@ -1045,11 +1046,12 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
             args
 
         (numOfChanges, updatedRows) <-
-          executeUpdateMutation
-            connection
-            table
-            pairsToSet
-            filterElements
+          SS.withImmediateTransaction connection $
+            executeUpdateMutation
+              connection
+              table
+              pairsToSet
+              filterElements
 
         mutationByPKResponse table numOfChanges $ P.head updatedRows
 
@@ -1069,8 +1071,11 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
                   , getReturningClause table
                   ]
 
-        deletedRows :: [[SQLData]] <- SS.query_ connection sqlQuery
-        numOfChanges <- SS.changes connection
+        (deletedRows :: [[SQLData]], numOfChanges) <-
+          SS.withImmediateTransaction connection $ do
+            rows <- SS.query_ connection sqlQuery
+            n <- SS.changes connection
+            pure (rows, n)
         mutationResponse table numOfChanges deletedRows
 
     executeDbDeletionsByPK :: TableEntry -> ReaderT Out.Context IO Value
@@ -1087,8 +1092,11 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
                   , getReturningClause table
                   ]
 
-        deletedRows :: [[SQLData]] <- SS.query_ connection sqlQuery
-        numOfChanges <- SS.changes connection
+        (deletedRows :: [[SQLData]], numOfChanges) <-
+          SS.withImmediateTransaction connection $ do
+            rows <- SS.query_ connection sqlQuery
+            n <- SS.changes connection
+            pure (rows, n)
         mutationByPKResponse table numOfChanges $ P.head deletedRows
 
     getInsertTableTuple :: TableEntry -> IO (Text, Resolver IO)
