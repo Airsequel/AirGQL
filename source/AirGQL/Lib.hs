@@ -872,18 +872,23 @@ getColumnsFromParsedTableEntry connection tableEntry = do
       "SELECT * FROM pragma_index_info(?)"
       [tableEntry.tbl_name]
 
-  -- TODO: Catch only SQL specific exceptions
   colEntriesRaw :: [ColumnEntryRaw] <-
-    catchAll
+    P.catches
       ( SS.query
           connection
           "SELECT * FROM pragma_table_xinfo(?)"
           [tableEntry.tbl_name]
       )
-      ( \exception -> do
-          P.putErrText $ show exception
+      [ P.Handler $ \(error :: SS.SQLError) -> do
+          P.putErrText $ sqliteErrorToText error
           pure []
-      )
+      , P.Handler $ \(error :: SS.FormatError) -> do
+          P.putErrText $ show error
+          pure []
+      , P.Handler $ \(error :: SS.ResultError) -> do
+          P.putErrText $ show error
+          pure []
+      ]
 
   let
     tableElementsMb = case tableEntry.statement of
