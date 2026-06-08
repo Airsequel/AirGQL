@@ -1,4 +1,4 @@
-resolver: lts-24.11
+resolver: lts-24.44
 
 extra-deps:
   - double-x-encoding-1.2.1
