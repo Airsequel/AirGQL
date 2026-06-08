@@ -76,6 +76,6 @@ executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
                       errors
                         <&> ((\(Response _ errs) -> errs) >>> toList)
                         & P.concat
-                        <&> (\(Error msg _ _) -> String msg)
+                          <&> (\(Error msg _ _) -> String msg)
                 }
         Right response -> pure response

@@ -213,8 +213,9 @@ instance ToJSON UniqueConstraint
 
 
 data ReferencesConstraintColumns
-  = -- | The "to" column is implicit.
-    -- Eg: `a TEXT REFERENCES other_table`
+  = {-| The "to" column is implicit.
+    Eg: `a TEXT REFERENCES other_table`
+    -}
     ImplicitColumns Text
   | -- | Explicit (from, to) pairs
     ExplicitColumns [(Text, Text)]
@@ -548,8 +549,8 @@ tableReferencesConstraints = \case
       <&> getColumnReferencesConstraint (nameAsText col_name)
       -- => Either Text [Maybe ColumnConstraint]
       & collectAllErrorsAsText
-      -- => Either Text [ColumnConstraint]
-      <&> P.catMaybes
+        -- => Either Text [ColumnConstraint]
+        <&> P.catMaybes
   _ -> pure []
 
 
@@ -589,7 +590,7 @@ getSqlObjectName = \case
   SQL.CreateTable names _ _ ->
     names
       & P.head
-      <&> nameAsText
+        <&> nameAsText
   SQL.CreateView _ _ names _ _ ->
     names
       >>= P.head
@@ -750,15 +751,15 @@ lintTable allEntries parsed =
               resolveReferencesConstraintColumns allEntries constraint
                 & P.fromMaybe []
                 & P.find (\(_, to) -> to == "rowid")
-                <&> \case
-                  (from, _to) ->
-                    "Column "
-                      <> quoteText from
-                      <> " references the rowid column of table "
-                      <> quoteText constraint.table
-                      <> ".\n"
-                      <> "This is not supported by SQLite:\n"
-                      <> "https://www.sqlite.org/foreignkeys.html"
+                  <&> \case
+                    (from, _to) ->
+                      "Column "
+                        <> quoteText from
+                        <> " references the rowid column of table "
+                        <> quoteText constraint.table
+                        <> ".\n"
+                        <> "This is not supported by SQLite:\n"
+                        <> "https://www.sqlite.org/foreignkeys.html"
           )
 
     withoutRowidWarning = case parsed.statement of

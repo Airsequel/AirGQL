@@ -161,18 +161,18 @@ buildSortClause columnEntries orderElems =
     else
       "ORDER BY "
         <> ( orderElems
-              <&> ( \(name, value) ->
-                      ( name
-                      , case value of
-                          Enum "ASC" -> "ASC"
-                          Enum "asc" -> "ASC"
-                          Enum "DESC" -> "DESC"
-                          Enum "desc" -> "DESC"
-                          _ -> ""
-                      )
-                  )
-              <&> (\(name, order) -> name <> " " <> order)
-              & T.intercalate ", "
+               <&> ( \(name, value) ->
+                       ( name
+                       , case value of
+                           Enum "ASC" -> "ASC"
+                           Enum "asc" -> "ASC"
+                           Enum "DESC" -> "DESC"
+                           Enum "desc" -> "DESC"
+                           _ -> ""
+                       )
+                   )
+               <&> (\(name, order) -> name <> " " <> order)
+               & T.intercalate ", "
            )
 
 
@@ -259,16 +259,16 @@ getWhereClause filterElements =
     else
       "WHERE "
         <> ( filterElements
-              <&> ( \(colName, x) -> case x of
-                      Object operatorAndValue ->
-                        let orClauses =
-                              opAndValToSql operatorAndValue
-                                <&> (colName <>)
-                                & intercalate " OR "
-                        in  "(" <> orClauses <> ")"
-                      _ -> ""
-                  )
-              & intercalate " AND "
+               <&> ( \(colName, x) -> case x of
+                       Object operatorAndValue ->
+                         let orClauses =
+                               opAndValToSql operatorAndValue
+                                 <&> (colName <>)
+                                 & intercalate " OR "
+                         in  "(" <> orClauses <> ")"
+                       _ -> ""
+                   )
+               & intercalate " AND "
            )
 
 
@@ -660,8 +660,8 @@ queryType connection accessMode dbId tables = do
                             orderElements -> pure orderElements
                           _ -> pure [] -- Should not be reachable
                       )
-                    -- => IO [(Name, Value)]
-                    <&> P.join
+                      -- => IO [(Name, Value)]
+                      <&> P.join
                 _ -> pure []
 
           limitElements :: Maybe P.Int32 <-
@@ -888,7 +888,7 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
                 <&> HashMap.keys
                 & P.concat
                 & nub
-                <&> doubleXDecode
+                  <&> doubleXDecode
 
             boundVariableNames :: [Text]
             boundVariableNames =
@@ -930,8 +930,8 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
             pure $
               "ON CONFLICT ("
                 <> ( constraint
-                      <&> quoteKeyword
-                      & intercalate ", "
+                       <&> quoteKeyword
+                       & intercalate ", "
                    )
                 <> ")\n DO UPDATE SET \n"
                 <> intercalate ",\n" updateClauses
@@ -945,8 +945,8 @@ mutationType connection maxRowsPerTable upgradeTo accessMode dbId tables = do
                 else
                   " ("
                     <> ( containedColumns
-                          <&> quoteKeyword
-                          & intercalate ", "
+                           <&> quoteKeyword
+                           & intercalate ", "
                        )
                     <> ")"
             insertedValues =

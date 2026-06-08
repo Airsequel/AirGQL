@@ -136,7 +136,7 @@ main = do
                 let exceptionText :: Text = show exception
                 if (exceptionText == "Thread killed by timeout manager")
                   || ( exceptionText
-                        == "Warp: Client closed connection prematurely"
+                         == "Warp: Client closed connection prematurely"
                      )
                   then pure ()
                   else do

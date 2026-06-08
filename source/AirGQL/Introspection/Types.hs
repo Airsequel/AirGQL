@@ -762,7 +762,7 @@ typeWithDeprecatedFilter Field{..} =
     { args =
         args
           <> [ inputValue "includeDeprecated" typeBool
-                & withDefaultValue (toGraphQL False)
+                 & withDefaultValue (toGraphQL False)
              ]
     , customResolver = \case
         Value.List values -> do

@@ -56,22 +56,22 @@ instance ToJSON SqlQueryPostResult where
         .= sqlQueryPostResult.affectedTables
           <> "rows"
           `pair` ( sqlQueryPostResult.rows
-                    & list
-                      ( \(row :: Object) ->
-                          -- Apply order of columns
-                          sqlQueryPostResult.columns
-                            & foldMap
-                              ( Key.fromText
-                                  >>> ( \col ->
-                                          col
-                                            .= ( row
-                                                  & KeyMap.lookup col
-                                                  & fromMaybe Null
-                                               )
-                                      )
-                              )
-                            & pairs
-                      )
+                     & list
+                       ( \(row :: Object) ->
+                           -- Apply order of columns
+                           sqlQueryPostResult.columns
+                             & foldMap
+                               ( Key.fromText
+                                   >>> ( \col ->
+                                           col
+                                             .= ( row
+                                                    & KeyMap.lookup col
+                                                    & fromMaybe Null
+                                                )
+                                       )
+                               )
+                             & pairs
+                       )
                  )
           <> "numChanges"
         .= sqlQueryPostResult.numChanges

@@ -551,10 +551,10 @@ testSuite = do
 
           result.rows
             `shouldBe` [ KeyMap.fromList
-                          [ ("TRUE", Number 1)
-                          , ("123", Number 123)
-                          , ("'test'", "test")
-                          ]
+                           [ ("TRUE", Number 1)
+                           , ("123", Number 123)
+                           , ("'test'", "test")
+                           ]
                        ]
 
           result.affectedTables `shouldMatchList` []
@@ -590,8 +590,8 @@ testSuite = do
 
           result.rows
             `shouldBe` [ KeyMap.singleton
-                          "abs(floor(cos(2 * pi() / 3)))"
-                          (Number 1.0)
+                           "abs(floor(cos(2 * pi() / 3)))"
+                           (Number 1.0)
                        ]
 
           result.affectedTables `shouldMatchList` []
@@ -614,10 +614,10 @@ testSuite = do
 
           result.rows
             `shouldBe` [ KeyMap.fromList
-                          [ ("replace('hello', 'e', 'XXX')", "hXXXllo")
-                          , ("like('hel%', 'hello')", Number 1)
-                          , ("glob('hel*', 'hello')", Number 1)
-                          ]
+                           [ ("replace('hello', 'e', 'XXX')", "hXXXllo")
+                           , ("like('hel%', 'hello')", Number 1)
+                           , ("glob('hel*', 'hello')", Number 1)
+                           ]
                        ]
 
           result.affectedTables `shouldMatchList` []
