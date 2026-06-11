@@ -22,6 +22,7 @@ module AirGQL.Utils (
   getSqliteBinaryVersion,
   getSqliteEmbeddedVersion,
   headerJsonContent,
+  openRetryConn,
   quoteKeyword,
   quoteText,
   removeIfExists,
@@ -354,17 +355,26 @@ data DiffKind = Added | Removed | Kept
   deriving (P.Eq, P.Ord, P.Show)
 
 
+{-| Open a connection that retries if the database is busy.
+| Prefer `withRetryConn`; use this only where the connection's lifetime
+| doesn't fit a bracket. The caller must close the connection.
+-}
+openRetryConn :: FilePath -> IO Connection
+openRetryConn filePath = do
+  conn <- SS.open filePath
+  SS.execute_ conn "PRAGMA busy_timeout = 5000;" -- 5 seconds
+  SS.execute_ conn "PRAGMA foreign_keys = True"
+  -- `synchronous` is intentionally left at SQLite's default (FULL).
+  -- WAL + synchronous=FULL is durable on Linux. Do NOT lower to NORMAL
+  -- without accepting loss of recently-committed txns on power loss.
+  -- See https://www.agwa.name/blog/post/sqlite_durability
+  pure conn
+
+
 {-| Run an action with a connection, retrying if the database is busy.
 | Necessary because of WAL mode:
 | https://sqlite.org/wal.html#sometimes_queries_return_sqlite_busy_in_wal_mode
 -}
 withRetryConn :: FilePath -> (Connection -> IO a) -> IO a
-withRetryConn filePath action = do
-  SS.withConnection filePath $ \conn -> do
-    SS.execute_ conn "PRAGMA busy_timeout = 5000;" -- 5 seconds
-    SS.execute_ conn "PRAGMA foreign_keys = True"
-    -- `synchronous` is intentionally left at SQLite's default (FULL).
-    -- WAL + synchronous=FULL is durable on Linux. Do NOT lower to NORMAL
-    -- without accepting loss of recently-committed txns on power loss.
-    -- See https://www.agwa.name/blog/post/sqlite_durability
-    action conn
+withRetryConn filePath action =
+  P.bracket (openRetryConn filePath) SS.close action
