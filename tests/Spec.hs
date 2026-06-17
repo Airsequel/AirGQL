@@ -97,6 +97,7 @@ import Tests.IntrospectionSpec qualified
 import Tests.MutationSpec qualified
 import Tests.QuerySpec qualified
 import Tests.Utils (
+  dataDbMainPath,
   dbPath,
   fixtureDbId,
   withDataDbConn,
@@ -546,7 +547,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = "SELECT TRUE, 123, 'test'"}
 
           result.rows
@@ -570,7 +571,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = "SELECT 0 AS b, 0 AS a"}
 
           (result & encodeToText & T.unpack)
@@ -585,7 +586,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = "SELECT abs(floor(cos(2 * pi() / 3)))"}
 
           result.rows
@@ -603,7 +604,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost
                   { query =
                       "SELECT "
@@ -651,7 +652,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = query}
 
           let
@@ -670,7 +671,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = query}
 
           let
@@ -696,7 +697,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = "SELECT * from notes"}
 
           result.rows
@@ -712,7 +713,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost
                   { query = SS.fromQuery createNotesTable
                   }
@@ -730,7 +731,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost{query = "DROP TABLE notes"}
 
           result.affectedTables `shouldMatchList` ["notes"]
@@ -745,7 +746,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost
                   { query =
                       "ALTER TABLE notes ADD COLUMN title TEXT"
@@ -763,7 +764,7 @@ testSuite = do
             runHandler $
               sqlQueryPostHandler
                 PragmaConf.defaultConf
-                ("_TEST_" <> dbId)
+                (dataDbMainPath dbId)
                 SQLPost
                   { query =
                       [raw| INSERT INTO "notes" VALUES ("hello") |]

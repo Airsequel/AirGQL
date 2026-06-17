@@ -4,6 +4,7 @@
 
 module Tests.Utils (
   testRoot,
+  dataDbMainPath,
   withDataDbConn,
   withTestDbConn,
   rmSpaces,
@@ -35,7 +36,7 @@ import Data.ByteString.Lazy qualified as BL
 import Data.Vector qualified as V
 import Database.SQLite.Simple qualified as SS
 import System.Directory (createDirectoryIfMissing, removePathForcibly)
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 
 import AirGQL.Utils (removeIfExists, withRetryConn)
 import Data.Aeson (ToJSON)
@@ -76,13 +77,22 @@ withTestDbConn testDbPath callback = do
     callback
 
 
+{-| Path to the main.sqlite of a test database in the main data directory.
+airgql's handlers now take database file paths explicitly (instead of
+resolving a db id internally), so tests build the path with this helper.
+-}
+dataDbMainPath :: FilePath -> FilePath
+dataDbMainPath testDbDir =
+  "data" </> "databases" </> "_TEST_" <> testDbDir </> "main.sqlite"
+
+
 -- | Get a connection to a test database in the main data directory
 withDataDbConn :: FilePath -> (SS.Connection -> IO a) -> IO a
 withDataDbConn testDbDir callback = do
-  let fullPath = "data" </> "databases" </> "_TEST_" <> testDbDir
-  removePathForcibly fullPath
-  createDirectoryIfMissing True fullPath
-  withRetryConn (fullPath </> "main.sqlite") callback
+  let mainDbPath = dataDbMainPath testDbDir
+  removePathForcibly $ takeDirectory mainDbPath
+  createDirectoryIfMissing True $ takeDirectory mainDbPath
+  withRetryConn mainDbPath callback
 
 
 rmSpaces :: Text -> BL.ByteString

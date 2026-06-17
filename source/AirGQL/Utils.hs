@@ -95,9 +95,18 @@ import System.Process.Typed (
 import AirGQL.ExternalAppContext (ExternalAppContext (sqlite))
 
 
+{-| Default root directory for the conventional Airsequel-style data layout
+(@\<root\>/databases/\<dbId\>/main.sqlite@). It is only a default: callers that
+manage their own storage location pass absolute paths into the handlers
+directly, so airgql never reads an environment variable to find data.
+-}
+defaultDataDir :: FilePath
+defaultDataDir = "data"
+
+
 getDbDir :: Text -> FilePath
 getDbDir dbId =
-  "data"
+  defaultDataDir
     </> "databases"
     </> T.unpack dbId
 
@@ -110,7 +119,7 @@ getMainDbPath dbId =
 
 getReadOnlyFilePath :: Text -> FilePath
 getReadOnlyFilePath readonlyId =
-  "data" </> "readonly" </> T.unpack readonlyId
+  defaultDataDir </> "readonly" </> T.unpack readonlyId
 
 
 getSqliteEmbeddedVersion :: Connection -> IO Text

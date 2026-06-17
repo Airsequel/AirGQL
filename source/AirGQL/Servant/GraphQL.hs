@@ -6,12 +6,12 @@ module AirGQL.Servant.GraphQL (
 
 import Protolude (
   Applicative (pure),
+  FilePath,
   MonadIO (liftIO),
   Monoid (mempty),
   Semigroup ((<>)),
   ($),
   (&),
-  (||),
  )
 import Protolude qualified as P
 
@@ -22,7 +22,6 @@ import Data.Text qualified as T
 import DoubleXEncoding (doubleXEncodeGql)
 import Servant (NoContent, err303, errHeaders)
 import Servant.Server qualified as Servant
-import System.Directory (makeAbsolute)
 
 import AirGQL.Lib (
   column_name,
@@ -33,13 +32,10 @@ import AirGQL.ServerUtils (executeQuery)
 import AirGQL.Types.SchemaConf (SchemaConf)
 import AirGQL.Types.Types (GQLPost (operationName, query, variables))
 import AirGQL.Utils (
-  getDbDir,
-  getMainDbPath,
   throwErr400WithMsg,
   throwErr404WithMsg,
   withRetryConn,
  )
-import System.FilePath (pathSeparator, takeDirectory)
 
 
 gqlQueryGetHandler :: Text -> Servant.Handler NoContent
@@ -53,10 +49,13 @@ gqlQueryGetHandler dbId =
 
 gqlQueryPostHandler ::
   SchemaConf ->
+  -- | Path to the SQLite database file to open
+  FilePath ->
+  -- | Database identifier (used for the schema name and generated file URLs)
   Text ->
   GQLPost ->
   Servant.Handler Object
-gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
+gqlQueryPostHandler schemaConf dbFilePath dbId gqlPost = do
   let
     handleNoDbError :: P.SomeException -> Servant.Handler a
     handleNoDbError excpetion = do
@@ -65,23 +64,18 @@ gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
       if "unable to open database file" `T.isInfixOf` errMsg
         then
           throwErr404WithMsg $
-            "Database \"" <> dbIdOrPath <> "\" does not exist"
+            "Database \"" <> dbId <> "\" does not exist"
         else do
           P.putErrLn $
             "Error during execution of GraphQL query: " <> errMsg
           throwErr400WithMsg errMsg
 
   catchAll
-    ( liftIO $ do
-        reqDir <-
-          if pathSeparator `T.elem` dbIdOrPath || '.' `T.elem` dbIdOrPath
-            then pure $ takeDirectory $ T.unpack dbIdOrPath
-            else makeAbsolute $ getDbDir dbIdOrPath
-
+    ( liftIO $
         executeQuery
           schemaConf
-          dbIdOrPath
-          reqDir
+          dbFilePath
+          dbId
           gqlPost.query
           (gqlPost.variables & P.fromMaybe mempty)
           gqlPost.operationName
@@ -90,10 +84,13 @@ gqlQueryPostHandler schemaConf dbIdOrPath gqlPost = do
 
 
 playgroundDefaultQueryHandler ::
+  -- | Path to the SQLite database file to open
+  FilePath ->
+  -- | Database identifier (used for column lookups)
   Text ->
   Servant.Handler Text
-playgroundDefaultQueryHandler dbId = do
-  liftIO $ withRetryConn (getMainDbPath dbId) $ \mainConn -> do
+playgroundDefaultQueryHandler dbFilePath dbId = do
+  liftIO $ withRetryConn dbFilePath $ \mainConn -> do
     tableEntries <- getTableNames mainConn
 
     case tableEntries of

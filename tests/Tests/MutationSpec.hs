@@ -37,6 +37,7 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (SQLData (SQLFloat, SQLInteger, SQLNull, SQLText))
 import Servant (runHandler)
 import Tests.Utils (
+  dataDbMainPath,
   dbPath,
   fixtureDbId,
   rmSpaces,
@@ -683,7 +684,7 @@ main = void $ do
           runHandler $
             sqlQueryPostHandler
               PragmaConf.defaultConf
-              ("_TEST_" <> dbId)
+              (dataDbMainPath dbId)
               SQLPost{query = "SELECT * from loaders"}
 
         restResult.rows

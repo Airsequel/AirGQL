@@ -20,10 +20,8 @@ import Conduit (sourceToList)
 import Control.Arrow ((>>>))
 import Data.Aeson (Object, Value (String))
 import Data.Text (Text)
-import Data.Text qualified as T
 import Language.GraphQL.Error (Error (Error), Response (Response))
 import Language.GraphQL.JSON (graphql)
-import System.FilePath (pathSeparator, (</>))
 
 import AirGQL.GraphQL (getDerivedSchema)
 import AirGQL.Lib (getEnrichedTables)
@@ -37,18 +35,15 @@ import AirGQL.Utils (withRetryConn)
 
 executeQuery ::
   SchemaConf ->
-  Text ->
+  -- | Path to the SQLite database file to open
   FilePath ->
+  -- | Database identifier (used for the schema name and generated file URLs)
+  Text ->
   Text ->
   Object ->
   Maybe Text ->
   IO Object
-executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
-  let dbFilePath =
-        if pathSeparator `T.elem` dbIdOrPath || '.' `T.elem` dbIdOrPath
-          then T.unpack dbIdOrPath
-          else reqDir </> "main.sqlite"
-
+executeQuery schemaConf dbFilePath dbId query vars opNameMb = do
   withRetryConn dbFilePath $ \theConn -> do
     tablesEither <- getEnrichedTables theConn
     case tablesEither of
@@ -60,7 +55,7 @@ executeQuery schemaConf dbIdOrPath reqDir query vars opNameMb = do
               , errors = Just [String err]
               }
       Right tables -> do
-        schema <- getDerivedSchema schemaConf theConn dbIdOrPath tables
+        schema <- getDerivedSchema schemaConf theConn dbId tables
         result <- graphql schema opNameMb vars query
 
         case result of

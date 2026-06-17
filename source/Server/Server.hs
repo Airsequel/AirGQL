@@ -164,16 +164,18 @@ platformAPI = Proxy
 
 platformServer :: ExternalAppContext -> P.FilePath -> Server PlatformAPI
 platformServer ctx filePath = do
-  let dbPath = T.pack filePath
-  gqlQueryGetHandler dbPath
-    :<|> gqlQueryPostHandler defaultSchemaConf dbPath
-    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = readOnly} dbPath
-    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = writeOnly} dbPath
-    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = insertOnly} dbPath
-    :<|> playgroundDefaultQueryHandler dbPath
-    :<|> apiDatabaseSchemaGetHandler ctx dbPath
-    :<|> apiDatabaseVacuumPostHandler dbPath
-    :<|> sqlQueryPostHandler defaultSchemaConf.pragmaConf dbPath
+  -- Single-database server: the file path is fixed at startup, and its own
+  -- path doubles as the database identifier for schema names / file URLs.
+  let dbId = T.pack filePath
+  gqlQueryGetHandler dbId
+    :<|> gqlQueryPostHandler defaultSchemaConf filePath dbId
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = readOnly} filePath dbId
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = writeOnly} filePath dbId
+    :<|> gqlQueryPostHandler defaultSchemaConf{accessMode = insertOnly} filePath dbId
+    :<|> playgroundDefaultQueryHandler filePath dbId
+    :<|> apiDatabaseSchemaGetHandler ctx filePath
+    :<|> apiDatabaseVacuumPostHandler filePath
+    :<|> sqlQueryPostHandler defaultSchemaConf.pragmaConf filePath
 
 
 platformApp :: ExternalAppContext -> P.FilePath -> Application

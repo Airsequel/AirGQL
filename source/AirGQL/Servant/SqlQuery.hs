@@ -7,6 +7,7 @@ where
 import Protolude (
   Applicative (pure),
   Either (Left, Right),
+  FilePath,
   Maybe (Just, Nothing),
   MonadIO (liftIO),
   Semigroup ((<>)),
@@ -58,7 +59,6 @@ import AirGQL.Types.SqlQueryPostResult (
   resultWithErrors,
  )
 import AirGQL.Utils (
-  getMainDbPath,
   throwErr400WithMsg,
   withRetryConn,
  )
@@ -88,10 +88,11 @@ getAffectedTables pre post =
 
 sqlQueryPostHandler ::
   PragmaConf ->
-  Text ->
+  -- | Path to the SQLite database file to open
+  FilePath ->
   SQLPost ->
   Servant.Handler SqlQueryPostResult
-sqlQueryPostHandler pragmaConf dbId sqlPost = do
+sqlQueryPostHandler pragmaConf dbFilePath sqlPost = do
   let maxSqlQueryLength :: P.Int = 100_000
 
   when (T.length sqlPost.query > maxSqlQueryLength) $ do
@@ -105,14 +106,13 @@ sqlQueryPostHandler pragmaConf dbId sqlPost = do
   validationErrors <- liftIO $ case parseSql sqlPost.query of
     Left error -> pure [prettyError error]
     Right statement@(CreateTable{}) ->
-      withRetryConn (getMainDbPath dbId) $ \conn ->
+      withRetryConn dbFilePath $ \conn ->
         lintTableCreationCode (Just conn) statement
     _ -> pure []
 
   case validationErrors of
     [] -> do
       let
-        dbFilePath = getMainDbPath dbId
         microsecondsPerSecond = 1000000 :: P.Int
 
         timeoutTimeMicroseconds =

@@ -11,19 +11,19 @@ module AirGQL.Servant.Database (
 
 import Protolude (
   Applicative (pure),
+  FilePath,
   MonadIO (liftIO),
   Monoid (mempty),
+  Text,
   ($),
  )
 
 import Data.Aeson (Object)
-import Data.Text (Text)
 import Database.SQLite.Simple qualified as SS
 import Servant.Server qualified as Servant
 
 import AirGQL.ExternalAppContext (ExternalAppContext)
 import AirGQL.Utils (
-  getMainDbPath,
   runSqliteCommand,
   withRetryConn,
  )
@@ -31,16 +31,18 @@ import AirGQL.Utils (
 
 apiDatabaseSchemaGetHandler ::
   ExternalAppContext ->
-  Text ->
+  -- | Path to the SQLite database file to open
+  FilePath ->
   Servant.Handler Text
-apiDatabaseSchemaGetHandler ctx dbId = do
-  runSqliteCommand ctx (getMainDbPath dbId) ".schema"
+apiDatabaseSchemaGetHandler ctx dbFilePath = do
+  runSqliteCommand ctx dbFilePath ".schema"
 
 
 apiDatabaseVacuumPostHandler ::
-  Text ->
+  -- | Path to the SQLite database file to open
+  FilePath ->
   Servant.Handler Object
-apiDatabaseVacuumPostHandler dbId = do
-  liftIO $ withRetryConn (getMainDbPath dbId) $ \conn ->
+apiDatabaseVacuumPostHandler dbFilePath = do
+  liftIO $ withRetryConn dbFilePath $ \conn ->
     SS.execute_ conn "VACUUM"
   pure mempty
