@@ -273,11 +273,16 @@ getOrderOfLinkedList tables =
             & List.nub
 
 
-getDbIdFromReadOnlyId :: Text -> IO (Maybe Text)
-getDbIdFromReadOnlyId readOnlyId = do
+{-| Resolve the read-only symlink at the given path to its target DB id.
+The caller passes the absolute symlink path so airgql never has to know
+where the data directory lives (which is configurable via AIRSEQUEL_DATA_DIR
+in the host application).
+-}
+getDbIdFromReadOnlyId :: FilePath -> IO (Maybe Text)
+getDbIdFromReadOnlyId readOnlyPath = do
   catchAll
     ( do
-        dbId <- liftIO $ readSymbolicLink $ getReadOnlyFilePath readOnlyId
+        dbId <- liftIO $ readSymbolicLink readOnlyPath
         pure $ Just $ T.pack $ takeFileName dbId
     )
     ( \err -> do
