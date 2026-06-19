@@ -40,7 +40,14 @@ getSQLitePragmas pragConf =
     getPrag key value =
       SS.Query $ "PRAGMA " <> key <> " = " <> value
   in
-    [ getPrag "case_sensitive_like" "True"
+    [ -- Wait up to 5 s for a lock to clear instead of failing immediately
+      -- with "database is locked". Must match the busy_timeout set on
+      -- regular connections in `openRetryConn`. Critically, this also
+      -- applies to the `sqlite3` CLI subprocesses (file-cell uploads,
+      -- CSV imports) that prepend these pragmas, since the CLI otherwise
+      -- defaults to a busy_timeout of 0.
+      getPrag "busy_timeout" "5000"
+    , getPrag "case_sensitive_like" "True"
     , getPrag "foreign_keys" "True"
     , -- TODO: Check if this really works
       getPrag "hard_heap_limit" $ show @Integer pragConf.hardHeapLimit
