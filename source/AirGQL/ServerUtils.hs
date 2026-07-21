@@ -12,7 +12,6 @@ import Protolude (
   ($),
   (&),
   (<&>),
-  (||),
  )
 import Protolude qualified as P
 
