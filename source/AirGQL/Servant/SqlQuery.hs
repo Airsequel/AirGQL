@@ -19,6 +19,7 @@ import Protolude (
   (*),
   (-),
   (/=),
+  (<$>),
   (<&>),
   (>),
  )
@@ -42,8 +43,10 @@ import AirGQL.Lib (
   getTables,
   lintTableCreationCode,
   parseSql,
+  splitSqlStatements,
   sqlDataToAesonValue,
   sqliteErrorToText,
+  validateStatementSafety,
  )
 import AirGQL.Types.PragmaConf (PragmaConf, getSQLitePragmas)
 import AirGQL.Types.SqlQueryPostResult (
@@ -103,12 +106,26 @@ sqlQueryPostHandler pragmaConf dbFilePath sqlPost = do
         <> show maxSqlQueryLength
         <> ")"
 
-  validationErrors <- liftIO $ case parseSql sqlPost.query of
-    Left error -> pure [prettyError error]
-    Right statement@(CreateTable{}) ->
-      withRetryConn dbFilePath $ \conn ->
-        lintTableCreationCode (Just conn) statement
-    _ -> pure []
+  statements <- liftIO $ splitSqlStatements sqlPost.query
+
+  -- Each statement is validated on its own, as they are also
+  -- executed one at a time.
+  validationErrors <-
+    liftIO $
+      if P.null statements
+        then pure ["No SQL statements were provided"]
+        else withRetryConn dbFilePath $ \conn ->
+          statements
+            & P.traverse
+              ( \statementTxt -> case validateStatementSafety statementTxt of
+                  errors@(_ : _) -> pure errors
+                  [] -> case parseSql statementTxt of
+                    Left error -> pure [prettyError error]
+                    Right statement@(CreateTable{}) ->
+                      lintTableCreationCode (Just conn) statement
+                    _ -> pure []
+              )
+              <&> P.concat
 
   case validationErrors of
     [] -> do
@@ -122,6 +139,22 @@ sqlQueryPostHandler pragmaConf dbFilePath sqlPost = do
       let sqlitePragmas = getSQLitePragmas pragmaConf
 
       let
+        -- Execute a single statement and
+        -- return its column names and result rows
+        runStatement conn statementTxt =
+          SS.withStatement conn (SS.Query statementTxt) $ \statement -> do
+            numCols <- SS.columnCount statement
+            columnNames <-
+              P.for [0 .. (numCols - 1)] $ SS.columnName statement
+            let
+              collectRows = do
+                rowMb :: Maybe [SS.SQLData] <- SS.nextRow statement
+                case rowMb of
+                  Just row -> (row :) <$> collectRows
+                  Nothing -> pure []
+            rows <- collectRows
+            pure (columnNames, rows)
+
         performSqlOperations =
           withRetryConn dbFilePath $ \conn -> do
             preTables <- getTables conn
@@ -129,21 +162,31 @@ sqlQueryPostHandler pragmaConf dbFilePath sqlPost = do
             P.for_ sqlitePragmas $ SS.execute_ conn
             SS.execute_ conn "PRAGMA foreign_keys = True"
 
-            let query = SS.Query sqlPost.query
+            changesBefore <- SS.totalChanges conn
 
-            columnNames <- SS.withStatement conn query $ \statement -> do
-              numCols <- SS.columnCount statement
-              P.for [0 .. (numCols - 1)] $ SS.columnName statement
+            -- Statements are executed in order and the rows of the
+            -- last statement are returned (like in the `sqlite3` CLI)
+            resultsMb <-
+              timeout timeoutTimeMicroseconds $
+                P.for statements $
+                  runStatement conn
 
-            tableRowsMb :: Maybe [[SS.SQLData]] <-
-              timeout timeoutTimeMicroseconds $ SS.query_ conn query
-            changes <- SS.changes conn
-
+            changesAfter <- SS.totalChanges conn
             postTables <- getTables conn
 
-            pure $ case tableRowsMb of
-              Just tableRows ->
-                Right (columnNames, tableRows, changes, preTables, postTables)
+            pure $ case resultsMb of
+              Just results ->
+                let
+                  (columnNames, tableRows) =
+                    results & P.lastMay & P.fromMaybe ([], [])
+                in
+                  Right
+                    ( columnNames
+                    , tableRows
+                    , changesAfter - changesBefore
+                    , preTables
+                    , postTables
+                    )
               Nothing -> Left "Sql query execution timed out"
 
       startTime <- liftIO getCurrentTime

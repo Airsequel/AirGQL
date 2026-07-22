@@ -38,6 +38,9 @@ module AirGQL.Lib (
   ReferencesConstraintColumns (..),
   CheckConstraint (..),
   sqlite, -- useful for pretty printing
+  splitSqlStatements,
+  validateStatementSafety,
+  readOnlyPragmas,
   stringToGqlTypeName,
   lintTableCreationCode,
   resolveReferencesConstraintColumns,
@@ -65,6 +68,7 @@ import Protolude (
   ($),
   (&),
   (&&),
+  (.),
   (<$>),
   (<&>),
   (>>=),
@@ -77,10 +81,13 @@ import Control.Monad (MonadFail (fail))
 import Control.Monad.Catch (catchAll)
 import Data.Aeson (FromJSON, ToJSON, Value (Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum, isSpace)
 import Data.List qualified as List
 import Data.Scientific qualified as Scientific
 import Data.Text (isInfixOf, toUpper)
 import Data.Text qualified as T
+import Data.Text.Encoding (encodeUtf8)
 import Database.SQLite.Simple (
   Connection,
   FromRow,
@@ -93,6 +100,8 @@ import Database.SQLite.Simple.FromField (FromField (fromField), fieldData)
 import Database.SQLite.Simple.Ok (Ok (Errors, Ok))
 import Database.SQLite.Simple.QQ qualified as SS
 import DoubleXEncoding (doubleXEncodeGql)
+import Foreign.C.String (CString)
+import Foreign.C.Types (CInt (CInt))
 import Language.SQL.SimpleSQL.Dialect (
   Dialect (
     diAppKeywords,
@@ -1133,16 +1142,273 @@ replaceCaseInsensitive removable replacement txt =
     process txt ""
 
 
-{-| Replace rem(movable) with rep(lacement)
-| and make sure its surrounded by spaces
+{-| Lowercased words with semicolons treated as whitespace,
+| so e.g. a terminating `END;` still yields the word "end"
 -}
-replaceWithSpace :: Text -> Text -> Text -> Text
-replaceWithSpace rem rep txt =
-  txt
-    & replaceCaseInsensitive (" " <> rem <> " ") (" " <> rep <> " ")
-    & replaceCaseInsensitive (" " <> rem <> "\n") (" " <> rep <> "\n")
-    & replaceCaseInsensitive ("\n" <> rem <> " ") ("\n" <> rep <> " ")
-    & replaceCaseInsensitive ("\n" <> rem <> "\n") ("\n" <> rep <> "\n")
+sqlWordsOf :: Text -> [Text]
+sqlWordsOf sqlQuery =
+  sqlQuery & T.toLower & T.replace ";" " " & T.words
+
+
+isSqlIdentChar :: P.Char -> Bool
+isSqlIdentChar char =
+  isAlphaNum char || char == '_'
+
+
+{-| Apply a rewrite at every position outside of string literals,
+| quoted identifiers, and comments. The callback receives whether the
+| position starts at a word boundary plus the remaining text, and
+| returns the replacement and the text after the matched part.
+-}
+rewriteSql :: (Bool -> Text -> Maybe (Text, Text)) -> Text -> Text
+rewriteSql tryRewrite input =
+  let
+    -- Copy a quoted section verbatim.
+    -- The text starts after the opening quote and doubled closing
+    -- quote characters are treated as escapes (`'it''s'`).
+    spanQuoted :: P.Char -> Text -> (Text, Text)
+    spanQuoted quoteChar text =
+      let (inside, closing) = T.break (== quoteChar) text
+      in  case T.stripPrefix (T.singleton quoteChar) closing of
+            Nothing -> (inside, "") -- Unterminated section
+            Just afterQuote ->
+              if quoteChar /= ']'
+                && T.isPrefixOf (T.singleton quoteChar) afterQuote
+                then
+                  let (more, rest) = spanQuoted quoteChar (T.drop 1 afterQuote)
+                  in  ( inside <> T.replicate 2 (T.singleton quoteChar) <> more
+                      , rest
+                      )
+                else (inside <> T.singleton quoteChar, afterQuote)
+
+    loop :: Bool -> Text -> [Text] -> [Text]
+    loop atBoundary text acc =
+      case tryRewrite atBoundary text of
+        Just (replacement, rest) -> loop True rest (replacement : acc)
+        Nothing ->
+          case T.uncons text of
+            Nothing -> acc
+            Just (char, rest)
+              | char `P.elem` ['\'', '"', '`', '['] ->
+                  let
+                    closingChar = if char == '[' then ']' else char
+                    (section, rest2) = spanQuoted closingChar rest
+                  in
+                    loop True rest2 (section : T.singleton char : acc)
+              | "--" `T.isPrefixOf` text ->
+                  let (comment, rest2) = T.breakOn "\n" text
+                  in  loop True rest2 (comment : acc)
+              | "/*" `T.isPrefixOf` text ->
+                  case T.breakOn "*/" text of
+                    (comment, "") -> loop True "" (comment : acc)
+                    (comment, rest2) ->
+                      loop True (T.drop 2 rest2) ((comment <> "*/") : acc)
+              | otherwise ->
+                  loop (P.not $ isSqlIdentChar char) rest (T.singleton char : acc)
+  in
+    loop True input [] & P.reverse & T.concat
+
+
+{-| Case-insensitively match one SQL word,
+| returning the text after it.
+| The word must be followed by a non-identifier character (or the end).
+-}
+matchSqlWord :: Text -> Text -> Maybe Text
+matchSqlWord word text = do
+  let (candidate, rest) = T.splitAt (T.length word) text
+  P.guard $ T.toLower candidate == word
+  P.guard $ case T.uncons rest of
+    Nothing -> True
+    Just (nextChar, _) -> P.not $ isSqlIdentChar nextChar
+  pure rest
+
+
+{-| Case-insensitively match a phrase of SQL words separated by
+| arbitrary whitespace, returning the text after the phrase
+-}
+matchSqlPhrase :: [Text] -> Text -> Maybe Text
+matchSqlPhrase phrase text =
+  case phrase of
+    [] -> Just text
+    [word] -> matchSqlWord word text
+    word : rest -> do
+      afterWord <- matchSqlWord word text
+      let afterSpace = T.dropWhile isSpace afterWord
+      P.guard $ T.length afterSpace P.< T.length afterWord
+      matchSqlPhrase rest afterSpace
+
+
+{-| Case-insensitively replace a phrase of SQL keywords when it appears
+| outside of string literals, quoted identifiers, and comments
+-}
+replaceSqlPhrase :: [Text] -> Text -> Text -> Text
+replaceSqlPhrase phrase replacement =
+  rewriteSql $ \atBoundary text -> do
+    P.guard atBoundary
+    rest <- matchSqlPhrase phrase text
+    pure (replacement, rest)
+
+
+{-| Cut the text short at the first occurrence of the given SQL phrase
+| outside of string literals, quoted identifiers, and comments
+-}
+truncateAtSqlPhrase :: [Text] -> Text -> Text
+truncateAtSqlPhrase phrase =
+  rewriteSql $ \atBoundary text -> do
+    P.guard atBoundary
+    _ <- matchSqlPhrase phrase text
+    pure ("", "")
+
+
+{-| Remove a keyword that directly follows a closing paren,
+| e.g. `… ) STRICT` or a generated column's `… ) STORED`.
+| The paren anchor avoids mangling the keyword when it is used
+| as a column name.
+-}
+removeKeywordAfterParen :: Text -> Text -> Text
+removeKeywordAfterParen keyword =
+  rewriteSql $ \_ text -> do
+    afterParen <- T.stripPrefix ")" text
+    rest <- matchSqlWord keyword (T.dropWhile isSpace afterParen)
+    pure (")", rest)
+
+
+{-| Drop leading whitespace, semicolons, and comments,
+| returning the text starting at the first significant token
+-}
+dropSqlNoise :: Text -> Text
+dropSqlNoise text =
+  if
+    | T.null text -> text
+    | "--" `T.isPrefixOf` text ->
+        dropSqlNoise (text & T.dropWhile (/= '\n') & T.drop 1)
+    | "/*" `T.isPrefixOf` text ->
+        case T.breakOn "*/" text of
+          (_, "") -> ""
+          (_, rest) -> dropSqlNoise (T.drop 2 rest)
+    | isSpace (T.head text) || T.head text == ';' ->
+        dropSqlNoise (T.drop 1 text)
+    | otherwise -> text
+
+
+-- | First SQL word of a statement, ignoring whitespace and comments
+firstSqlWord :: Text -> Text
+firstSqlWord text =
+  dropSqlNoise text & T.takeWhile isSqlIdentChar & T.toLower
+
+
+{-| Whether the given SQL keyword appears anywhere in the text,
+| outside of string literals, quoted identifiers, and comments
+-}
+containsSqlWord :: Text -> Text -> Bool
+containsSqlWord word text =
+  T.length (truncateAtSqlPhrase [word] text) P./= T.length text
+
+
+{-| Read-only / introspection pragmas that are safe to expose via the
+| SQL API. Every pragma listed here is read-only in all of its forms
+| (bare and `pragma(arg)`), so none of them can mutate the database or
+| relax a resource guard. Settable pragmas are deliberately excluded —
+| even their read form is rejected — because their `pragma(value)`
+| call form is a disguised write (e.g. `PRAGMA foreign_keys(0)`).
+-}
+readOnlyPragmas :: [Text]
+readOnlyPragmas =
+  [ "collation_list"
+  , "compile_options"
+  , "data_version"
+  , "database_list"
+  , "foreign_key_check"
+  , "foreign_key_list"
+  , "freelist_count"
+  , "function_list"
+  , "index_info"
+  , "index_list"
+  , "index_xinfo"
+  , "integrity_check"
+  , "module_list"
+  , "page_count"
+  , "pragma_list"
+  , "quick_check"
+  , "table_info"
+  , "table_list"
+  , "table_xinfo"
+  ]
+
+
+data PragmaForm = PragmaRead | PragmaCall | PragmaAssign
+  deriving (Eq, Show)
+
+
+{-| Parse a `PRAGMA [schema.]name [= value | (args)]` statement into its
+| pragma name (lowercased, schema prefix stripped) and its form.
+| Returns Nothing when the statement is not a PRAGMA.
+-}
+parsePragmaStatement :: Text -> Maybe (Text, PragmaForm)
+parsePragmaStatement statementTxt = do
+  afterPragma <- matchSqlWord "pragma" (dropSqlNoise statementTxt)
+  let
+    -- A pragma may be qualified by a schema, e.g. `main.table_info`.
+    -- Keep the segment after the dot as the pragma name.
+    (segment, afterSegment) =
+      afterPragma & T.dropWhile isSpace & T.span isSqlIdentChar
+    (name, afterName) = case T.uncons afterSegment of
+      Just ('.', afterDot) -> T.span isSqlIdentChar afterDot
+      _ -> (segment, afterSegment)
+    form = case T.uncons (T.dropWhile isSpace afterName) of
+      Just ('=', _) -> PragmaAssign
+      Just ('(', _) -> PragmaCall
+      _ -> PragmaRead
+  P.guard $ P.not $ T.null name
+  pure (T.toLower name, form)
+
+
+{-| Reject statements that would bypass Airsequel's resource and
+| integrity guards even though the parser (and SQLite) accept them:
+| non-read-only PRAGMAs, which can relax the storage/heap limits or
+| foreign-key enforcement, and `VACUUM … INTO`, which writes an
+| arbitrary file on the server. Returns the validation errors, if any.
+-}
+validateStatementSafety :: Text -> [Text]
+validateStatementSafety statementTxt =
+  case firstSqlWord statementTxt of
+    "pragma" ->
+      case parsePragmaStatement statementTxt of
+        Just (name, form)
+          | form P.== PragmaAssign ->
+              ["Setting PRAGMA values is not allowed via the SQL API"]
+          | name `notElem` readOnlyPragmas ->
+              [ "PRAGMA "
+                  <> name
+                  <> " is not allowed via the SQL API. "
+                  <> "Only read-only pragmas are permitted "
+                  <> "(e.g. table_info, foreign_key_list, integrity_check)."
+              ]
+        _ -> []
+    "vacuum"
+      | containsSqlWord "into" statementTxt ->
+          ["VACUUM … INTO is not allowed via the SQL API"]
+    _ -> []
+
+
+{-| Rewrite SQLite's null-safe `a IS b` comparison to `a = b`,
+| which the parser understands. `IS` forms the parser supports
+| natively (`IS NULL`, `IS TRUE`, `IS NOT …`, `IS DISTINCT FROM`, …)
+| are left untouched.
+-}
+rewriteGenericIs :: Text -> Text
+rewriteGenericIs =
+  rewriteSql $ \atBoundary text -> do
+    P.guard atBoundary
+    rest <- matchSqlWord "is" text
+    let nextWord =
+          rest
+            & T.dropWhile isSpace
+            & T.takeWhile isSqlIdentChar
+            & T.toLower
+    P.guard $
+      nextWord `P.notElem` ["not", "null", "true", "false", "unknown", "distinct"]
+    pure ("=", rest)
 
 
 sanitizeSql :: Text -> Text
@@ -1150,27 +1416,50 @@ sanitizeSql sql =
   sql
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/27
-    & replaceWithSpace "if not exists" ""
+    & replaceSqlPhrase ["if", "not", "exists"] ""
+    & replaceSqlPhrase ["if", "exists"] ""
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/37
-    & replaceCaseInsensitive "insert or abort " "insert "
-    & replaceCaseInsensitive "insert or fail " "insert "
-    & replaceCaseInsensitive "insert or ignore " "insert "
-    & replaceCaseInsensitive "insert or replace " "insert "
-    & replaceCaseInsensitive "insert or rollback " "insert "
+    & replaceSqlPhrase ["insert", "or", "abort"] "INSERT"
+    & replaceSqlPhrase ["insert", "or", "fail"] "INSERT"
+    & replaceSqlPhrase ["insert", "or", "ignore"] "INSERT"
+    & replaceSqlPhrase ["insert", "or", "replace"] "INSERT"
+    & replaceSqlPhrase ["insert", "or", "rollback"] "INSERT"
+    -- Must come after the `insert or replace` rule above
+    & replaceSqlPhrase ["replace", "into"] "INSERT INTO"
     -- Removing the JSON arrow operator seems to be enough
     -- to make the parser accept all queries containing JSON operators
     & T.replace "->" ""
     -- https://www.sqlite.org/stricttables.html
-    & replaceCaseInsensitive ")strict" ")"
-    & replaceCaseInsensitive ") strict" ")"
-    & replaceCaseInsensitive ")\nstrict" ")"
-    & replaceCaseInsensitive ") \nstrict" ")"
+    & removeKeywordAfterParen "strict"
+    -- Generated columns
+    -- TODO: Remove after
+    --       https://github.com/JakeWheat/simple-sql-parser/issues/46
+    & removeKeywordAfterParen "stored"
+    & removeKeywordAfterParen "virtual"
+    -- Statement types the parser doesn't support at all are replaced
+    -- with a dummy statement to accept them.
+    -- SQLite itself reports an error during execution if necessary.
+    -- ATTACH and DETACH are deliberately not included,
+    -- as rejecting them keeps them from being executed.
+    & ( \sqlQuery ->
+          if firstSqlWord sqlQuery
+            `P.elem` [ "pragma"
+                     , "vacuum"
+                     , "analyze"
+                     , "reindex"
+                     , "begin"
+                     , "end"
+                     , "release"
+                     ]
+            then "SELECT 0" -- Dummy statement to accept the query
+            else sqlQuery
+      )
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/20
     & ( \sqlQuery ->
           if P.all
-            (\word -> word `P.elem` T.words (T.toLower sqlQuery))
+            (\word -> word `P.elem` sqlWordsOf sqlQuery)
             ["alter", "table", "rename"]
             then "SELECT 0" -- Dummy statement to accept the query
             else sqlQuery
@@ -1179,27 +1468,30 @@ sanitizeSql sql =
     --       https://github.com/JakeWheat/simple-sql-parser/issues/41
     & ( \sqlQuery ->
           if P.all
-            (\word -> word `P.elem` T.words (T.toLower sqlQuery))
+            (\word -> word `P.elem` sqlWordsOf sqlQuery)
             ["create", "trigger", "on", "begin", "end"]
             then "SELECT 0" -- Dummy statement to accept the query
             else sqlQuery
       )
-    & replaceCaseInsensitive "drop trigger" "drop table"
-    & replaceCaseInsensitive "drop index" "drop table"
-    -- Uncomment unsupported "RETURNING" clause
-    -- TODO: Add support for DELETE and UPDATE with RETURNING
+    & replaceSqlPhrase ["drop", "trigger"] "DROP TABLE"
+    & replaceSqlPhrase ["drop", "index"] "DROP TABLE"
+    -- The parser supports neither RETURNING nor upsert clauses,
+    -- so DML statements are cut short at those keywords.
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/42
-    & replaceCaseInsensitive ")returning " ") -- returning "
-    & replaceCaseInsensitive ") returning " ") -- returning "
-    & replaceCaseInsensitive ")\nreturning " ")\n-- returning "
-    & replaceCaseInsensitive ") \nreturning " ")\n-- returning "
+    & ( \sqlQuery ->
+          if firstSqlWord sqlQuery
+            `P.elem` ["insert", "update", "delete", "with"]
+            then
+              sqlQuery
+                & truncateAtSqlPhrase ["on", "conflict"]
+                & truncateAtSqlPhrase ["returning"]
+            else sqlQuery
+      )
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/43
-    & replaceWithSpace "==" "="
-    & replaceWithSpace "is not" "%$@_TEMP_@$%"
-    & replaceWithSpace "is" "="
-    & replaceWithSpace "%$@_TEMP_@$%" "is not"
+    & T.replace "==" "="
+    & rewriteGenericIs
     -- The internal table is created without column types
     -- TODO: Remove after
     -- https://github.com/JakeWheat/simple-sql-parser/issues/38#issuecomment-1413340116
@@ -1215,12 +1507,8 @@ sanitizeSql sql =
       "sqlite_stat4(tbl TEXT,idx TEXT,neq TEXT,nlt TEXT,ndlt TEXT,sample BLOB)"
     -- TODO: Remove after
     --       https://github.com/JakeWheat/simple-sql-parser/issues/40
-    & replaceWithSpace "NOT NULL DEFAULT" "DEFAULT"
-    -- TODO: Remove after
-    --       https://github.com/JakeWheat/simple-sql-parser/issues/46
-    & replaceCaseInsensitive "STORED" ""
-    & replaceCaseInsensitive "VIRTUAL" ""
-    & replaceWithSpace "GLOB" "LIKE"
+    & replaceSqlPhrase ["not", "null", "default"] "DEFAULT"
+    & replaceSqlPhrase ["glob"] "LIKE"
 
 
 -- | SQLite dialect
@@ -1427,6 +1715,70 @@ sqlite =
 parseSql :: Text -> P.Either ParseError Statement
 parseSql sqlQuery =
   parseStatement sqlite "" P.Nothing $ sanitizeSql sqlQuery
+
+
+foreign import ccall unsafe "sqlite3_complete"
+  sqlite3Complete :: CString -> IO CInt
+
+
+{-| Whether the text ends in a complete SQL statement, i.e. a semicolon
+| that is not inside a string literal, a comment,
+| or a trigger's `BEGIN … END` block.
+| Wraps SQLite's own `sqlite3_complete`.
+-}
+sqlIsComplete :: Text -> IO Bool
+sqlIsComplete text = do
+  result <- BS.useAsCString (encodeUtf8 text) sqlite3Complete
+  pure $ result == 1
+
+
+-- | Whether the text contains only whitespace, semicolons, and comments
+sqlIsBlank :: Text -> Bool
+sqlIsBlank = loop
+  where
+    loop text =
+      case T.uncons text of
+        Nothing -> True
+        Just (char, rest)
+          | "--" `T.isPrefixOf` text ->
+              loop (text & T.dropWhile (/= '\n') & T.drop 1)
+          | "/*" `T.isPrefixOf` text ->
+              let (_, after) = T.breakOn "*/" text
+              in  T.null after || loop (T.drop 2 after)
+          | isSpace char || char == ';' -> loop rest
+          | otherwise -> False
+
+
+{-| Split a SQL script into its individual statements.
+| Statement boundaries are found with SQLite's `sqlite3_complete`,
+| so semicolons inside string literals, comments,
+| and trigger definitions (`BEGIN … END`) are handled correctly.
+| Statements without any SQL content are omitted.
+-}
+splitSqlStatements :: Text -> IO [Text]
+splitSqlStatements sqlText = do
+  (pendingMb, statementsReversed) <-
+    P.foldM
+      ( \(pendingMb, statements) segment -> do
+          let candidate = case pendingMb of
+                P.Nothing -> segment
+                P.Just pending -> pending <> ";" <> segment
+          isComplete <- sqlIsComplete (candidate <> ";")
+          pure $
+            if isComplete
+              then (P.Nothing, (candidate <> ";") : statements)
+              else (P.Just candidate, statements)
+      )
+      (P.Nothing, [])
+      (T.splitOn ";" sqlText)
+
+  -- Text after the last semicolon is an unterminated final statement.
+  -- Execute it anyway so SQLite can report its own error if it's invalid.
+  let statements = P.reverse $ case pendingMb of
+        P.Nothing -> statementsReversed
+        P.Just pending -> pending : statementsReversed
+
+  pure $ statements & P.filter (P.not . sqlIsBlank)
 
 
 newtype SQLPost = SQLPost

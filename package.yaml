@@ -138,6 +138,7 @@ tests:
       - graphql-spice >= 1.0.2 && < 1.1
       - hspec >= 2.11.8 && < 2.12
       - servant-server >= 0.20 && < 0.21
+      - simple-sql-parser >= 0.6 && < 0.9
       - sqlite-simple >= 0.4.19 && < 0.5
       - unix >= 2.8.4 && < 2.9
       - vector >=0.13.0.0 && < 0.14

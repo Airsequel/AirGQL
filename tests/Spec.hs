@@ -9,12 +9,14 @@
 
 import Protolude (
   Bool (False, True),
-  Either (Right),
+  Either (Left, Right),
   FilePath,
   IO,
   Maybe (Just, Nothing),
+  pure,
   ($),
   (&),
+  (<&>),
   (<>),
  )
 import Protolude qualified as P
@@ -30,6 +32,7 @@ import Database.SQLite.Simple (
  )
 import Database.SQLite.Simple qualified as SS
 import Database.SQLite.Simple.QQ (sql)
+import Language.SQL.SimpleSQL.Parse (prettyError)
 import Servant.Server (runHandler)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -73,8 +76,12 @@ import AirGQL.Lib (
   ),
   getColumns,
   getTables,
+  parseSql,
   replaceCaseInsensitive,
+  sanitizeSql,
+  splitSqlStatements,
   stringToGqlTypeName,
+  validateStatementSafety,
  )
 import AirGQL.Lib qualified
 import AirGQL.Raw (raw)
@@ -84,6 +91,7 @@ import AirGQL.Types.SqlQueryPostResult (
   SqlQueryPostResult (
     affectedTables,
     errors,
+    numChanges,
     rows
   ),
  )
@@ -527,6 +535,113 @@ testSuite = do
       getOrderOfLinkedList [("c", Just "a"), ("b", Just "a"), ("a", Just "b")]
         `shouldBe` ["a", "b", "c"]
 
+    describe "splitSqlStatements" $ do
+      it "splits a script into individual statements" $ do
+        statements <- splitSqlStatements "SELECT 1; SELECT 2;"
+        statements `shouldBe` ["SELECT 1;", " SELECT 2;"]
+
+      it "keeps a final statement without a trailing semicolon" $ do
+        statements <- splitSqlStatements "SELECT 1;\nSELECT 2"
+        statements `shouldBe` ["SELECT 1;", "\nSELECT 2;"]
+
+      it "ignores semicolons inside strings and comments" $ do
+        statements <-
+          splitSqlStatements "SELECT 'a;b'; -- comment; with semicolon\nSELECT 2;"
+        statements
+          `shouldBe` ["SELECT 'a;b';", " -- comment; with semicolon\nSELECT 2;"]
+
+      it "keeps trigger definitions as one statement" $ do
+        statements <-
+          splitSqlStatements
+            "CREATE TRIGGER cleanup AFTER DELETE ON users \
+            \BEGIN DELETE FROM notes; DELETE FROM todos; END;\n\
+            \SELECT 1;"
+        statements
+          `shouldBe` [ "CREATE TRIGGER cleanup AFTER DELETE ON users \
+                       \BEGIN DELETE FROM notes; DELETE FROM todos; END;"
+                     , "\nSELECT 1;"
+                     ]
+
+      it "omits statements without any SQL content" $ do
+        statements <- splitSqlStatements "  ;;\n-- just a comment\n; /* block */"
+        statements `shouldBe` []
+
+    describe "sanitizeSql" $ do
+      let acceptedByParser sqlTxt =
+            case parseSql sqlTxt of
+              Right _ -> pure ()
+              Left error ->
+                Hspec.expectationFailure $
+                  T.unpack $
+                    sqlTxt <> " was rejected:\n" <> prettyError error
+
+      it "accepts SQLite syntax the parser doesn't support" $ do
+        acceptedByParser "CREATE TABLE\tIF NOT EXISTS foo (bar TEXT)"
+        acceptedByParser "DROP TABLE IF EXISTS foo"
+        acceptedByParser "CREATE TABLE foo (bar TEXT) STRICT;"
+        acceptedByParser "REPLACE INTO foo VALUES (1)"
+        acceptedByParser "SELECT * FROM foo WHERE a==1"
+        acceptedByParser "SELECT * FROM foo WHERE a IS b"
+        acceptedByParser "SELECT * FROM foo WHERE a IS DISTINCT FROM b"
+        acceptedByParser "SELECT stored FROM foo"
+        acceptedByParser
+          "INSERT INTO foo (a) VALUES (1) \
+          \ON CONFLICT (a) DO UPDATE SET a = 2"
+        acceptedByParser "INSERT INTO foo (a) VALUES (1) RETURNING\n*"
+        acceptedByParser "UPDATE foo SET a = 1 RETURNING *"
+        acceptedByParser "DELETE FROM foo RETURNING *"
+
+      it "accepts statement types the parser doesn't support" $ do
+        acceptedByParser "PRAGMA user_version"
+        acceptedByParser "VACUUM"
+        acceptedByParser "ANALYZE"
+        acceptedByParser "REINDEX"
+        acceptedByParser "BEGIN TRANSACTION"
+        acceptedByParser "END"
+        acceptedByParser "RELEASE foo"
+
+      it "does not rewrite keywords in identifiers, strings, or comments" $ do
+        sanitizeSql "SELECT stored FROM foo"
+          `shouldBe` "SELECT stored FROM foo"
+        sanitizeSql "CREATE TABLE foo (restored TEXT, virtualization TEXT)"
+          `shouldBe` "CREATE TABLE foo (restored TEXT, virtualization TEXT)"
+        sanitizeSql "SELECT 'insert or replace into drop trigger'"
+          `shouldBe` "SELECT 'insert or replace into drop trigger'"
+        sanitizeSql "SELECT \"glob\" FROM foo -- if not exists\n"
+          `shouldBe` "SELECT \"glob\" FROM foo -- if not exists\n"
+
+    describe "validateStatementSafety" $ do
+      let allowed sqlTxt =
+            validateStatementSafety sqlTxt `shouldBe` []
+      let rejected sqlTxt =
+            P.length (validateStatementSafety sqlTxt) `shouldBe` 1
+
+      it "allows read-only and non-PRAGMA statements" $ do
+        allowed "PRAGMA table_info(users)"
+        allowed "PRAGMA main.table_info(users)"
+        allowed "PRAGMA foreign_key_list('t')"
+        allowed "pragma INTEGRITY_CHECK"
+        allowed "SELECT * FROM foo WHERE x = 1"
+        allowed "INSERT INTO t VALUES ('into me')"
+        allowed "VACUUM"
+
+      it "rejects PRAGMA writes, including the call form" $ do
+        rejected "PRAGMA max_page_count = 1000000000"
+        rejected "PRAGMA foreign_keys = OFF"
+        rejected "PRAGMA writable_schema = ON"
+        -- `pragma(value)` is a disguised write for settable pragmas
+        rejected "PRAGMA foreign_keys(0)"
+        rejected "PRAGMA cache_size(-1000000)"
+
+      it "rejects reads of non-whitelisted (settable) pragmas" $ do
+        rejected "PRAGMA max_page_count"
+        rejected "PRAGMA user_version"
+        rejected "PRAGMA journal_mode"
+
+      it "rejects VACUUM ... INTO" $ do
+        rejected "VACUUM INTO '/tmp/exfil.db'"
+        rejected "VACUUM main INTO 'x'"
+
   describe "REST API" $ do
     describe "SQL" $ do
       it "supports retrieving the schema" $ do
@@ -559,6 +674,176 @@ testSuite = do
                        ]
 
           result.affectedTables `shouldMatchList` []
+
+      it "supports executing multiple SQL statements" $ do
+        let dbId = "api-sql-multi-statement"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost
+                  { query =
+                      "CREATE TABLE notes (content TEXT);\n\
+                      \INSERT INTO notes VALUES ('hello');\n\
+                      \INSERT INTO notes VALUES ('world');\n\
+                      \SELECT * FROM notes"
+                  }
+
+          result.errors `shouldBe` []
+
+          -- The rows of the last statement are returned
+          result.rows
+            `shouldBe` [ KeyMap.singleton "content" "hello"
+                       , KeyMap.singleton "content" "world"
+                       ]
+
+          result.numChanges `shouldBe` 2
+          result.affectedTables `shouldMatchList` ["notes"]
+
+      it "supports scripts with trigger creation statements" $ do
+        let dbId = "api-sql-multi-trigger"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost
+                  { query =
+                      "CREATE TABLE chats (id TEXT PRIMARY KEY NOT NULL);\n\
+                      \CREATE TABLE chat_messages (chat_id TEXT NOT NULL);\n\
+                      \CREATE TRIGGER chats_delete_cascade\n\
+                      \AFTER DELETE ON chats\n\
+                      \BEGIN\n\
+                      \  DELETE FROM chat_messages WHERE chat_id = OLD.id;\n\
+                      \END;"
+                  }
+
+          result.errors `shouldBe` []
+          result.affectedTables `shouldMatchList` ["chats", "chat_messages"]
+
+          withRetryConn (dataDbMainPath dbId) $ \conn -> do
+            triggers :: [[SS.SQLData]] <-
+              SS.query_
+                conn
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            triggers `shouldBe` [[SS.SQLText "chats_delete_cascade"]]
+
+      it "supports upserts and RETURNING clauses" $ do
+        let dbId = "api-sql-upsert-returning"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost
+                  { query =
+                      "CREATE TABLE counters \
+                      \(id TEXT PRIMARY KEY NOT NULL, count INTEGER NOT NULL);\n\
+                      \INSERT INTO counters VALUES ('a', 1);\n\
+                      \INSERT INTO counters VALUES ('a', 5)\n\
+                      \  ON CONFLICT (id) DO UPDATE SET count = count + 1;\n\
+                      \UPDATE counters SET count = count + 10 RETURNING count;"
+                  }
+
+          result.errors `shouldBe` []
+          result.rows `shouldBe` [KeyMap.singleton "count" (Number 12)]
+
+      it "supports read-only PRAGMA statements" $ do
+        let dbId = "api-sql-pragma"
+        withDataDbConn dbId $ \conn -> do
+          execute_ conn "CREATE TABLE notes (content TEXT)"
+
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost{query = "PRAGMA table_info(notes)"}
+
+          result.errors `shouldBe` []
+          (result.rows <&> KeyMap.lookup "name")
+            `shouldBe` [Just "content"]
+
+      it "rejects PRAGMAs that write or relax resource guards" $ do
+        let dbId = "api-sql-pragma-write"
+        withDataDbConn dbId $ \_ -> do
+          -- Overriding the storage-quota guard must not be possible
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost{query = "PRAGMA max_page_count = 1000000000"}
+
+          P.length result.errors `shouldBe` 1
+
+          -- The call form is a disguised write and must be blocked too
+          Right callResult <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost{query = "PRAGMA foreign_keys(0)"}
+
+          P.length callResult.errors `shouldBe` 1
+
+      it "rejects VACUUM INTO to prevent arbitrary file writes" $ do
+        let dbId = "api-sql-vacuum-into"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost{query = "VACUUM INTO '/tmp/airgql-exfil-test.db'"}
+
+          P.length result.errors `shouldBe` 1
+
+      it "supports transactions in scripts" $ do
+        let dbId = "api-sql-transaction"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost
+                  { query =
+                      "CREATE TABLE items (name TEXT);\n\
+                      \BEGIN;\n\
+                      \INSERT INTO items VALUES ('a');\n\
+                      \COMMIT;\n\
+                      \SELECT * FROM items;"
+                  }
+
+          result.errors `shouldBe` []
+          result.rows `shouldBe` [KeyMap.singleton "name" "a"]
+
+      it "stops executing statements after an error" $ do
+        let dbId = "api-sql-multi-error"
+        withDataDbConn dbId $ \_ -> do
+          Right result <-
+            runHandler $
+              sqlQueryPostHandler
+                PragmaConf.defaultConf
+                (dataDbMainPath dbId)
+                SQLPost
+                  { query =
+                      "CREATE TABLE goals (title TEXT NOT NULL);\n\
+                      \INSERT INTO goals VALUES (NULL);\n\
+                      \INSERT INTO goals VALUES ('valid');"
+                  }
+
+          P.length result.errors `shouldBe` 1
+
+          withRetryConn (dataDbMainPath dbId) $ \conn -> do
+            goals :: [[SS.SQLData]] <-
+              SS.query_ conn "SELECT * FROM goals"
+            goals `shouldBe` []
 
       it "return columns in the requested order" $ do
         -- Even though JSON objects are unordered by definition,
